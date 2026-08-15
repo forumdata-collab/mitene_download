@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mitene 相簿備份 101 · 開放 API 實戰</title>
+<meta name="description" content="用 mitene_download（fork 版）將 Mitene / Family Album 相簿全部相片影片備份落本地或 Google Drive：冷卻防鎖、年月分類、log 統計、rclone 轉存。">
+<style>
+/* ===== 模板 CSS (hermes-oracle-guide 同款) ===== */
+:root{--bg1:#0f0c29;--bg2:#302b63;--bg3:#24243e;--card:rgba(255,255,255,0.05);--border:rgba(255,255,255,0.08);--text:#e8e8e8;--dim:rgba(255,255,255,0.45);--accent:#6c8cff;--green:#4ade80;--orange:#fb923c;--red:#f87171;--purple:#a78bfa;--teal:#2dd4bf;--cyan:#22d3ee;--teal-dim:rgba(45,212,191,0.12);--cyan-dim:rgba(34,211,238,0.12)}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:20px}
+body{font-family:'PingFang TC','Microsoft JhengHei','Noto Sans TC',sans-serif;background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);color:var(--text);line-height:1.75;min-height:100vh}
+.container{max-width:880px;margin:0 auto;padding:20px 16px 40px}
+a{color:var(--accent)}
+code{background:rgba(255,255,255,0.08);padding:1px 6px;border-radius:4px;font-size:0.92em;font-family:'SF Mono',Consolas,monospace}
+.back-link{display:inline-block;color:var(--dim);text-decoration:none;font-size:13px;margin-bottom:14px}
+.back-link:hover{color:var(--text)}
+.hero{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px 24px;margin-bottom:24px}
+.hero-badge{display:inline-block;background:rgba(108,140,255,0.12);color:var(--accent);padding:3px 12px;border-radius:20px;font-size:12px;margin-bottom:12px;border:1px solid rgba(108,140,255,0.25)}
+.hero h1{font-size:26px;line-height:1.4;margin-bottom:10px}
+.hero p{color:var(--dim);font-size:15px}
+.hero .disclaimer{margin-top:14px;padding:10px 14px;border-radius:10px;background:rgba(251,146,60,0.1);border:1px solid rgba(251,146,60,0.3);color:var(--orange);font-size:13px}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:28px}
+.toc a{color:var(--dim);text-decoration:none;font-size:13px;border:1px solid var(--border);padding:4px 10px;border-radius:20px;transition:all .2s}
+.toc a:hover{color:#fff;border-color:var(--accent);background:rgba(108,140,255,0.1)}
+.section{margin-bottom:40px;scroll-margin-top:16px}
+.section-title{font-size:21px;display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.section-title .num{display:inline-flex;align-items:center;justify-content:center;min-width:32px;height:32px;background:rgba(108,140,255,0.15);color:var(--accent);border-radius:9px;font-size:15px;font-weight:700}
+.section-desc{color:var(--dim);font-size:14px;margin-bottom:16px}
+.arch-flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin:14px 0;font-size:14px}
+.arch-flow .arrow{color:var(--dim)}
+.arch-flow span{background:rgba(45,212,191,0.1);border:1px solid rgba(45,212,191,0.3);color:var(--teal);padding:4px 12px;border-radius:8px}
+.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:16px 0}
+.feature-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.feature-card .f-icon{font-size:22px;margin-bottom:8px}
+.feature-card h3{font-size:15px;margin-bottom:6px}
+.feature-card p{font-size:13px;color:var(--dim)}
+.step-list{counter-reset:step;list-style:none}
+.step-item{position:relative;padding:0 0 20px 44px;margin-bottom:8px}
+.step-item::before{counter-increment:step;content:counter(step);position:absolute;left:0;top:0;width:30px;height:30px;background:rgba(108,140,255,0.15);color:var(--accent);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+.step-item h3{font-size:16px;margin-bottom:6px}
+.step-item p{font-size:14px;color:var(--dim);margin-bottom:4px}
+.step-item strong{color:var(--text)}
+.cmd{background:rgba(0,0,0,0.35);border:1px solid var(--border);border-radius:10px;padding:12px 16px;font-family:'SF Mono',Consolas,monospace;font-size:13px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0;color:#d4d4ff}
+.tip{border-radius:10px;padding:12px 16px;font-size:14px;margin:12px 0;line-height:1.7}
+.tip.info{background:rgba(34,211,238,0.08);border:1px solid rgba(34,211,238,0.3);color:var(--cyan)}
+.tip.green{background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.3);color:var(--green)}
+.tip.red{background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);color:var(--red)}
+.tip.warn{background:rgba(251,146,60,0.08);border:1px solid rgba(251,146,60,0.3);color:var(--orange)}
+.table-wrap{overflow-x:auto;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:rgba(255,255,255,0.04);color:var(--dim);font-weight:600}
+tr:hover td{background:rgba(255,255,255,0.03)}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;margin-left:6px}
+.badge.ok{background:rgba(74,222,128,0.12);color:var(--green)}
+.badge.need{background:rgba(251,146,60,0.12);color:var(--orange)}
+.badge.teal{background:rgba(45,212,191,0.12);color:var(--teal)}
+.link-block{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-top:8px}
+.link-block h3{font-size:15px;margin-bottom:10px;color:var(--dim)}
+.link-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed var(--border)}
+.link-row:last-child{border-bottom:none}
+.link-row .label{font-size:14px}
+.link-row a{font-size:13px;text-decoration:none}
+.footer{text-align:center;color:var(--dim);font-size:12px;margin-top:40px;padding-top:20px;border-top:1px solid var(--border)}
+@media (max-width:640px){.hero h1{font-size:21px}.toc a{font-size:12px}}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <a class="back-link" href="../">← 返回主頁</a>
+
+  <div class="hero">
+    <div class="hero-badge">開放 API 實戰 · 2026-08-15 · fork v0.8.0</div>
+    <h1>Mitene 家庭相簿自動備份 · 101 教學</h1>
+    <p>用 mitene_download 將 Mitene / Family Album 全部相片 + 影片備份落本地或 Google Drive<br>冷卻防鎖、年月分類、log 統計、rclone 轉存 —— 一次過講清</p>
+    <div class="disclaimer">⚠️ 本教學使用 <b>forumdata-collab fork</b>（v0.8.0），比 upstream 多四項功能：冷卻退避、年月子目錄、log 統計、GDrive 轉存。</div>
+  </div>
+
+  <div class="toc">
+    <a href="#arch">架構</a>
+    <a href="#prep">事前準備</a>
+    <a href="#install">安裝</a>
+    <a href="#basic">基本用法</a>
+    <a href="#features">Fork 新功能</a>
+    <a href="#gdrive">GDrive 轉存</a>
+    <a href="#cron">自動排程</a>
+    <a href="#pitfalls">常見坑</a>
+  </div>
+
+  <div class="section" id="arch">
+    <div class="section-title"><span class="num">1</span>架構原理</div>
+    <p class="section-desc">Mitene 網頁版逐頁 API 拉取相簿內容，每項媒體一個下載 URL。Script 並行 4 個下載，已有檔案自動 skip（斷點續傳）。</p>
+    <div class="arch-flow">
+      <span>Mitene 網頁 API</span><span class="arrow">→</span><span>逐頁 pagination</span><span class="arrow">→</span><span>並行下載 (×4)</span><span class="arrow">→</span><span>YYYY-MM/ 分類</span><span class="arrow">→</span><span>(可選) rclone → GDrive</span>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card"><div class="f-icon">🛡️</div><h3>冷卻防鎖</h3><p>下載間 jitter sleep + 429/5xx 指數退避重試</p></div>
+      <div class="feature-card"><div class="f-icon">📁</div><h3>年月分類</h3><p>按拍攝時間自動歸入 2024-05/ 子目錄</p></div>
+      <div class="feature-card"><div class="f-icon">📋</div><h3>Log 統計</h3><p>每次執行記錄新增/跳過/失敗數量</p></div>
+      <div class="feature-card"><div class="f-icon">☁️</div><h3>GDrive 轉存</h3><p>rclone 一條命令搬上雲端</p></div>
+    </div>
+  </div>
+
+  <div class="section" id="prep">
+    <div class="section-title"><span class="num">2</span>事前準備</div>
+    <p class="section-desc">全部免費。需要：雲端 VM（或任何長期開機的電腦）、Python 3.10+。</p>
+    <ul class="step-list">
+      <li class="step-item"><h3>取得相簿分享 URL</h3><p>喺 Mitene app 邀請一位家庭成員使用網頁版，就會得到形如 <code>https://mitene.us/f/abcd123456</code> 嘅 URL。</p></li>
+      <li class="step-item"><h3>（轉存版）設定 rclone + GDrive</h3><p><code>rclone config</code> → 揀 <code>drive</code> → 跟指示授權 → remote 名建議 <code>gdrive</code>。</p></li>
+    </ul>
+  </div>
+
+  <div class="section" id="install">
+    <div class="section-title"><span class="num">3</span>安裝</div>
+    <div class="cmd">pip install git+https://github.com/forumdata-collab/mitene_download.git</div>
+    <p>或者 clone 落 VM 直接用：</p>
+    <div class="cmd">git clone https://github.com/forumdata-collab/mitene_download.git<br>cd mitene_download && pip install -e .</div>
+  </div>
+
+  <div class="section" id="basic">
+    <div class="section-title"><span class="num">4</span>基本用法（本地版）</div>
+    <div class="cmd">mitene_download https://mitene.us/f/abcd123456 --destination-directory out</div>
+    <p>密碼保護相簿會提示輸入；自動建立 <code>out/YYYY-MM/</code> 子目錄，檔名含拍攝時間。重跑同一指令只會補漏（已有檔案 skip）。</p>
+    <div class="tip green"><strong>輸出結構</strong>：<code>out/2024-05/2024-05-01T12-34-56-xxxx.jpg</code> · 留言存成同名 <code>.md</code>。</div>
+  </div>
+
+  <div class="section" id="features">
+    <div class="section-title"><span class="num">5</span>Fork 新功能速查</div>
+    <div class="table-wrap"><table>
+      <tr><th>參數</th><th>預設</th><th>作用</th></tr>
+      <tr><td><code>--cooldown N</code></td><td>0.3 秒</td><td>下載之間 jitter sleep；<code>0</code> 關閉；遇 429/5xx 自動指數退避重試（最多 4 次）</td></tr>
+      <tr><td><code>--no-organize</code></td><td>開</td><td>關閉年月子目錄，回復 upstream 平面輸出</td></tr>
+      <tr><td><code>--gdrive-upload REMOTE:FOLDER</code></td><td>關</td><td>下載完成後 <code>rclone move</code> 到 GDrive</td></tr>
+      <tr><td><code>--nocomments</code></td><td>關</td><td>唔下載留言 .md 檔</td></tr>
+    </table></div>
+    <p>每次執行後會喺 <code>out/download.log</code> 追加一行：</p>
+    <div class="cmd">[2026-08-15T08:11:01] url=https://mitene.us/f/abc added=3 skipped=10 failed=1 -&gt; out/</div>
+  </div>
+
+  <div class="section" id="gdrive">
+    <div class="section-title"><span class="num">6</span>轉存 GDrive</div>
+    <p class="section-desc">一條命令搞掂 —— 落完本地自動搬上 GDrive：</p>
+    <div class="cmd">mitene_download https://mitene.us/f/abcd123456 --destination-directory out --gdrive-upload gdrive:mitene-backup</div>
+    <div class="tip warn"><strong>rclone move 會刪除本地檔案</strong>。想本地留一份，改用 <code>rclone sync out/ gdrive:mitene-backup</code> 自己喺 cron 執行。</div>
+    <div class="tip info"><strong>兩個版本點揀？</strong>本地版 (A) = 第一欄指令；轉存版 (B) = 加 <code>--gdrive-upload</code>。A 覆蓋「先落本地再手動備份」，B 覆蓋「落完直上雲端」。同一 script 兩個用途，唔使維護兩份 code。</div>
+  </div>
+
+  <div class="section" id="cron">
+    <div class="section-title"><span class="num">7</span>自動排程</div>
+    <p class="section-desc">每日凌晨自動補漏（已有檔案 skip，所以重跑好安全）：</p>
+    <div class="cmd">crontab -e<br># 每日 03:00 同步一次<br>0 3 * * * cd ~/mitene_download && mitene_download https://mitene.us/f/abcd123456 --destination-directory out &gt;&gt; /tmp/mitene_cron.log 2&gt;&amp;1</div>
+    <div class="tip green"><strong>點樣確認有冇新嘢？</strong>睇 <code>out/download.log</code> 最尾一行 —— <code>added=N</code> 大過 0 即有新檔。</div>
+  </div>
+
+  <div class="section" id="pitfalls">
+    <div class="section-title"><span class="num">8</span>常見坑</div>
+    <div class="table-wrap"><table>
+      <tr><th>問題</th><th>解</th></tr>
+      <tr><td>第一次用 organise 後全部重新下載</td><td>舊平面檔名同新 <code>YYYY-MM/</code> 路徑唔同，第一次會重拉。已加 migrate：開頭自動搬舊檔入對應月份，搬完就唔會重下載。</td></tr>
+      <tr><td>下載中斷留低 <code>.tmp</code></td><td>下次執行開頭自動清理，唔使手動刪。</td></tr>
+      <tr><td>429 / 下載失敗</td><td>自動指數退避重試 4 次（1s→2s→4s→8s 加 jitter）；仲係失敗會記入 log 同 stderr。</td></tr>
+      <tr><td>唔想佢 sleep 咁密</td><td><code>--cooldown 0.1</code> 加速；<code>--cooldown 0</code> 完全關閉（有被鎖風險，唔建議）。</td></tr>
+      <tr><td>URL 過期（expiringUrl）</td><td>每個媒體嘅下載 URL 即場由頁面 API 攞，唔會過期；整條 album URL 先係長期有效嗰條。</td></tr>
+    </table></div>
+  </div>
+
+  <div class="section" id="upstream">
+    <div class="section-title"><span class="num">9</span>Upstream 對照</div>
+    <p class="section-desc">本 fork 基於 <a href="https://github.com/perrinjerome/mitene_download" target="_blank" rel="noopener">perrinjerome/mitene_download</a> v0.7.0（MIT）。新增功能全部向後兼容，唔用新 flag 就等同原版行為。上游更新後可用 <code>git merge upstream/main</code> 同步。</p>
+  </div>
+
+  <div class="footer">
+    <p>Mitene 相簿備份 101 · fork v0.8.0 · MIT License · Last updated: 2026-08-15</p>
+  </div>
+
+</div>
+</body>
+</html>

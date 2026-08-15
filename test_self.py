@@ -1,0 +1,45 @@
+"""Self-check for fork additions: organize, migrate, cooldown jitter, log, retry backoff.
+Run: python3 test_self.py  (no network needed)"""
+import os, sys, tempfile, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mitene_download as m
+
+fail = []
+def ok(name, cond):
+    print(f"{'✅' if cond else '❌'} {name}")
+    if not cond: fail.append(name)
+
+# 1. organize_dest: tookAt -> YYYY-MM subdir
+with tempfile.TemporaryDirectory() as d:
+    p = m.organize_dest(d, "2024-05-01T12-34-56")
+    ok("organize creates YYYY-MM dir", os.path.isdir(p) and p == os.path.join(d, "2024-05"))
+
+# 2. migrate: flat file -> month dir
+with tempfile.TemporaryDirectory() as d:
+    flat = os.path.join(d, "2024-05-01T12-34-56-photo.jpg")
+    open(flat, "w").write("x")
+    m.migrate_flat_files(d)
+    ok("migrate moves flat -> YYYY-MM", os.path.exists(os.path.join(d, "2024-05", "2024-05-01T12-34-56-photo.jpg")) and not os.path.exists(flat))
+
+# 3. log line format
+with tempfile.TemporaryDirectory() as d:
+    m.append_log(d, {"new": 3, "skip": 10, "error": 1}, "https://mitene.us/f/abc")
+    line = open(os.path.join(d, "download.log")).read().strip()
+    ok("log has added/skipped/failed", "added=3 skipped=10 failed=1" in line and line.startswith("[20"))
+
+# 4. jittered_cooldown respects scale (0 -> fast, 0.2 -> ~0.1-0.3s)
+t0 = time.monotonic(); m.jittered_cooldown(0); t1 = time.monotonic()
+ok("cooldown=0 is instant", (t1 - t0) < 0.05)
+t0 = time.monotonic(); m.jittered_cooldown(0.2); t1 = time.monotonic()
+ok("cooldown=0.2 sleeps ~0.1-0.3s", 0.05 <= (t1 - t0) <= 0.6)
+
+# 5. download_media skip path (existing file -> 'skip', no network)
+import asyncio
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, "x.jpg"); open(f, "w").write("x")
+    res = asyncio.run(m.download_media(None, "http://none", f, "x", False, 0))  # type: ignore[arg-type]
+    ok("existing file returns 'skip'", res == "skip")
+
+print("\n" + ("ALL PASS ✅" if not fail else f"FAILED: {fail}"))
+sys.exit(1 if fail else 0)
