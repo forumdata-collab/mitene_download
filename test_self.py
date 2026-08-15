@@ -39,7 +39,7 @@ import asyncio
 with tempfile.TemporaryDirectory() as d:
     f = os.path.join(d, "x.jpg"); open(f, "w").write("x")
     res = asyncio.run(m.download_media(None, "http://none", f, "x", False, 0))  # type: ignore[arg-type]
-    ok("existing file returns 'skip'", res == "skip")
+    ok("existing file returns ('skip', None)", isinstance(res, tuple) and res[0] == "skip")
 
 # 6. months/since filter logic (same predicate as in async_main)
 def passes_filter(month, months_filter, since_filter):
@@ -50,6 +50,28 @@ def passes_filter(month, months_filter, since_filter):
     return True
 ok("months filter includes only selected", passes_filter("2024-05", {"2024-05", "2024-06"}, None) and not passes_filter("2024-04", {"2024-05", "2024-06"}, None))
 ok("since filter >= boundary", passes_filter("2024-01", None, "2024-01") and not passes_filter("2023-12", None, "2024-01"))
+
+# 7. error log writes per-file detail
+with tempfile.TemporaryDirectory() as d:
+    m.append_error_log(d, "https://mitene.us/f/abc", ["photo1: HTTP 429", "video2: timeout"])
+    log = open(os.path.join(d, "errors.log")).read()
+    ok("errors.log has header + per-file lines", "failed=2" in log and "photo1: HTTP 429" in log and "video2: timeout" in log)
+    m.append_error_log(d, "https://mitene.us/f/abc", [])
+    ok("no errors -> no errors.log change", open(os.path.join(d, "errors.log")).read().count("#") == 1)
+
+# 8. estimate_run: counts + size probing
+import io, contextlib
+med = [
+    {"contentType": "image/jpeg", "size": 3_000_000},
+    {"contentType": "video/mp4", "fileSize": 100_000_000},
+    {"contentType": "image/jpeg"},  # unknown size
+]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    m.estimate_run(med, 0.3, 100)
+out = buf.getvalue()
+ok("estimate counts photos/videos", "相片 2" in out and "影片 1" in out)
+ok("estimate shows duration", "小時" in out and "評估" in out)
 
 print("\n" + ("ALL PASS ✅" if not fail else f"FAILED: {fail}"))
 sys.exit(1 if fail else 0)

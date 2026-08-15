@@ -141,6 +141,8 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td><code>--gdrive-upload REMOTE:FOLDER</code></td><td>關</td><td>下載完成後 <code>rclone move</code> 到 GDrive</td></tr>
       <tr><td><code>--months YYYY-MM,...</code></td><td>—</td><td>只下載指定月份（如 <code>--months 2024-05,2024-06</code>）</td></tr>
       <tr><td><code>--since YYYY-MM</code></td><td>—</td><td>只下載呢個月之後嘅所有月份</td></tr>
+      <tr><td><code>--dry-run</code></td><td>關</td><td>執行前評估：總檔數 / 相片影片分佈 / 總大小 / 預計耗時，唔下載任何檔案</td></tr>
+      <tr><td><code>--bandwidth-mbps N</code></td><td>100</td><td>dry-run 估算用嘅頻寬（影響預計耗時）</td></tr>
       <tr><td><code>--nocomments</code></td><td>關</td><td>唔下載留言 .md 檔</td></tr>
     </table></div>
     <p>每次執行後會喺 <code>out/download.log</code> 追加一行：</p>
@@ -187,6 +189,8 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td>可以整網頁版，即下即上唔經 VM 嗎？</td><td>做唔到。瀏覽器直接由 mitene 下載 → GDrive 需要跨兩個網域：mitene 唔開放 CORS（私有相簿），GDrive 直寫要 OAuth client，大影片喺瀏覽器記憶體傳輸唔穩定。任何純前端方案都要一個後台代理——個代理就係 VM，繞唔到。</td></tr>
       <tr><td>用 Google 免費服務（Apps Script / Cloud Functions）做中轉？</td><td>兩個都唔啱：Apps Script 單次執行 <strong>6 分鐘上限</strong> + 單個 response <strong>20MB</strong>——影片全部超標；Cloud Functions 免費 tier 要綁信用卡先開到，而且本質都係中轉伺服器。微縮版（只拉縮圖清單）可以，全相簿連影片過唔到紅線。</td></tr>
       <tr><td>可以只同步指定年月份嗎？</td><td>可以。<code>--months 2024-05,2024-06</code> 指定月份；<code>--since 2024-01</code> 只拉 2024 年 1 月之後。</td></tr>
+      <tr><td>點知成個相簿有幾大、要跑幾耐？</td><td>先跑 <code>--dry-run</code>：掃描全部頁面，統計總檔數（相片/影片分佈）、總大小（未知大小以 3MB 估）、預計耗時（<code>--bandwidth-mbps</code> 改頻寬）。唔會下載任何檔案，確認滿意先正式跑。</td></tr>
+      <tr><td>下載有失敗點 debug？</td><td>每次執行結束，失敗檔逐個寫入 <code>out/errors.log</code>（時間戳標題 + 每行 <code>名稱: 錯誤訊息</code>），同時 <code>download.log</code> 有 added/skipped/failed 總數。重跑只會補漏失敗嗰啲。</td></tr>
     </table></div>
     <div class="tip info"><strong>debug 提示</strong>：以下係 2026-08-15 實測結論——CORS、Apps Script 6 分鐘/20MB 紅線、rclone move 斷線重拉，呢三點係後人最易撞返嘅牆。</div>
   </div>

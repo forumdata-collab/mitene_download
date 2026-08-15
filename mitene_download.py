@@ -51,12 +51,12 @@ async def download_media(
   media_name: str,
   verbose: bool,
   cooldown: float,
-) -> str:
-  """Download one media from URL. Returns 'new' | 'skip' | 'error'."""
+) -> tuple:
+  """Download one media from URL. Returns ('new'|'skip', None) or ('error', 'name: message')."""
   if os.path.exists(destination_filename):
     if verbose:
       print(f"{media_name} already downloaded ✔️", flush=True)
-    return "skip"
+    return ("skip", None)
   last_err = None
   for attempt in range(4):  # exponential backoff: 0s, 2s, 4s, 8s
     try:
@@ -74,7 +74,7 @@ async def download_media(
         print(f"Downloading {media_name} ⏳", flush=True)
       if cooldown:
         jittered_cooldown(cooldown)
-      return "new"
+      return ("new", None)
     except Exception as e:  # network error
       last_err = str(e)
       await asyncio.sleep(2 ** attempt * random.uniform(1, 2))
@@ -83,7 +83,7 @@ async def download_media(
   except OSError:
     pass
   print(f"❌ {media_name} failed after retries: {last_err}", file=sys.stderr, flush=True)
-  return "error"
+  return ("error", f"{media_name}: {last_err}")
 
 
 def organize_dest(destination_directory: str, took_at: str) -> str:
@@ -121,6 +121,52 @@ def append_log(destination_directory: str, stats: dict, album_url: str) -> None:
   print(line, flush=True)
 
 
+def append_error_log(destination_directory: str, album_url: str, errors: list) -> None:
+  """Append one line per failed file to errors.log for post-run debugging."""
+  if not errors:
+    return
+  path = os.path.join(destination_directory, "errors.log")
+  with open(path, "a", encoding="utf-8") as f:
+    f.write(f"# {datetime.datetime.now().isoformat(timespec='seconds')} url={album_url} failed={len(errors)}\n")
+    for err in errors:
+      f.write(f"- {err}\n")
+  print(f"❌ {len(errors)} failures logged -> errors.log", file=sys.stderr, flush=True)
+
+
+def estimate_run(medias: list, cooldown: float, bandwidth_mbps: float) -> None:
+  """Pre-run estimate: file count, total size, expected duration."""
+  photos = videos = 0
+  size_known = size_unknown = 0
+  total_bytes = 0
+  for m in medias:
+    if "video" in (m.get("contentType") or "").lower():
+      videos += 1
+    else:
+      photos += 1
+    # media dict often carries a size field; upstream may name it differently, probe common keys
+    size = None
+    for k in ("size", "fileSize", "contentLength", "byteSize"):
+      v = m.get(k)
+      if isinstance(v, (int, float)):
+        size = v
+        break
+    if size and size > 0:
+      size_known += 1
+      total_bytes += size
+    else:
+      size_unknown += 1
+  total_files = photos + videos
+  # unknown sizes: estimate 3MB each (typical phone photo)
+  est_bytes = total_bytes + size_unknown * 3 * 1024 * 1024
+  speed = bandwidth_mbps * 1e6 / 8  # bytes/sec
+  est_sec = total_files * cooldown + est_bytes / speed
+  print(f"\n📊 執行前評估 (--dry-run, 未下載任何檔案)")
+  print(f"   總檔案數: {total_files} (相片 {photos} / 影片 {videos})")
+  print(f"   總大小: {total_bytes/1e9:.2f} GB (已統計) + {size_unknown} 個未知大小 (估 3MB 每個) ≈ {est_bytes/1e9:.2f} GB")
+  print(f"   預計耗時: @{bandwidth_mbps:.0f} Mbps + {cooldown}s cooldown ≈ {est_sec/3600:.1f} 小時")
+  print(f"   實際可用: --bandwidth-mbps 改頻寬 · --cooldown 改冷卻 · --months/--since 收窄範圍\n")
+
+
 async def async_main() -> None:
   parser = argparse.ArgumentParser(prog="mitene_download", description=__doc__)
   parser.add_argument("album_url", help="URL obtained by inviting a family member for the web version.")
@@ -133,6 +179,8 @@ async def async_main() -> None:
   parser.add_argument("--gdrive-upload", metavar="REMOTE:FOLDER", help="After download, rclone move files to GDrive (e.g. gdrive:mitene-backup).")
   parser.add_argument("--months", help="Only download these YYYY-MM months, comma-separated (e.g. 2024-05,2024-06).")
   parser.add_argument("--since", help="Only download months >= this YYYY-MM (e.g. 2024-01 = last 2 years).")
+  parser.add_argument("--dry-run", action="store_true", help="Estimate only: count files, total size, expected duration. Downloads nothing.")
+  parser.add_argument("--bandwidth-mbps", type=float, default=100.0, help="Assumed download bandwidth for --dry-run estimate (default 100).")
   args = parser.parse_args()
 
   months_filter = None
@@ -149,7 +197,9 @@ async def async_main() -> None:
     migrate_flat_files(args.destination_directory)
 
   stats = {"new": 0, "skip": 0, "error": 0}
+  errors = []  # (media_name, error_message) for errors.log
   download_coroutines = []
+  all_medias = []  # for --dry-run estimate
   async with aiohttp.ClientSession(
     timeout=aiohttp.ClientTimeout(total=datetime.timedelta(minutes=30).total_seconds())
   ) as session:
@@ -202,6 +252,11 @@ async def async_main() -> None:
           dest_dir = organize_dest(args.destination_directory, media["tookAt"])
         destination_filename = os.path.join(dest_dir, filename)
 
+        # --dry-run: collect media for estimate, skip download work
+        if args.dry_run:
+          all_medias.append(media)
+          continue
+
         download_coroutines.append(
           download_media(
             session,
@@ -223,12 +278,19 @@ async def async_main() -> None:
           if not (comment_file.exists() and comment_file.read_text(encoding="utf-8") == comment_text):
             comment_file.write_text(comment_text, encoding="utf-8")
 
+    if args.dry_run:
+      estimate_run(all_medias, args.cooldown, args.bandwidth_mbps)
+      return
+
     results = await gather_with_concurrency(4, *download_coroutines)
-    for res in results:
-      if res in stats:
-        stats[res] += 1
+    errors = []
+    for status, detail in results:
+      stats[status] += 1
+      if status == "error":
+        errors.append(detail)
 
   append_log(args.destination_directory, stats, args.album_url)
+  append_error_log(args.destination_directory, args.album_url, errors)
 
   if args.gdrive_upload:
     cmd = ["rclone", "move", args.destination_directory, args.gdrive_upload,
