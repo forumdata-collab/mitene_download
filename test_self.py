@@ -68,7 +68,7 @@ med = [
 ]
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
-    m.estimate_run(med, 0.3, 100)
+    asyncio.run(m.estimate_run(med, 0.3, 100))
 out = buf.getvalue()
 ok("estimate counts photos/videos", "相片 2" in out and "影片 1" in out)
 ok("estimate shows duration", "小時" in out and "評估" in out)
@@ -79,9 +79,16 @@ with tempfile.TemporaryDirectory() as d:
     open(os.path.join(d, "2024-05", "2024-05-01T12-34-56-photo.jpg"), "w").write("x")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        m.estimate_run(med, 0.3, 100, d)
+        asyncio.run(m.estimate_run(med, 0.3, 100, d))
     out2 = buf.getvalue()
     ok("estimate excludes downloaded (已下載 1)", "已下載 1" in out2 and "待下載 2" in out2)
+
+# 8c. estimate_run without session falls back to 3MB estimate
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    asyncio.run(m.estimate_run(med, 0.3, 100))
+out3 = buf.getvalue()
+ok("estimate shows size estimate note", "GB" in out3 and ("3MB/檔粗估" in out3))
 
 print("\n" + ("ALL PASS ✅" if not fail else f"FAILED: {fail}"))
 sys.exit(1 if fail else 0)
