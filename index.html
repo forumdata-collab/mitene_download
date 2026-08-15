@@ -80,6 +80,7 @@ tr:hover td{background:rgba(255,255,255,0.03)}
   </div>
 
   <div class="toc">
+    <a href="#about">介紹</a>
     <a href="#arch">架構</a>
     <a href="#prep">事前準備</a>
     <a href="#install">安裝</a>
@@ -88,7 +89,10 @@ tr:hover td{background:rgba(255,255,255,0.03)}
     <a href="#gdrive">GDrive 轉存</a>
     <a href="#cron">自動排程</a>
     <a href="#pitfalls">常見坑</a>
+    <a href="#upstream">Upstream</a>
+    <a href="#about">家家相簿介紹</a>
   </div>
+
 
   <div class="section" id="arch">
     <div class="section-title"><span class="num">1</span>架構原理</div>
@@ -170,6 +174,33 @@ tr:hover td{background:rgba(255,255,255,0.03)}
   <div class="section" id="upstream">
     <div class="section-title"><span class="num">9</span>Upstream 對照</div>
     <p class="section-desc">本 fork 基於 <a href="https://github.com/perrinjerome/mitene_download" target="_blank" rel="noopener">perrinjerome/mitene_download</a> v0.7.0（MIT）。新增功能全部向後兼容，唔用新 flag 就等同原版行為。上游更新後可用 <code>git merge upstream/main</code> 同步。</p>
+  </div>
+
+
+  <div class="section" id="about">
+    <div class="section-title"><span class="num">10</span>家家相簿（FamilyAlbum）是什麼</div>
+    <p class="section-desc"><strong>家家相簿</strong>由日本 mixi 株式會社開發，係家族專屬嘅相片與影片分享 App，繁體中文版 2020 年 1 月喺台灣正式推出。截至 2019 年底全球用戶突破 600 萬，喺日本每三位媽媽就有一位使用。核心理念係「令育兒更加開心」——提供一個父母安心、安全噉同家族成員分享孩子成長紀錄嘅私密空間，避免喺公開社群曝光孩子相片嘅風險。</p>
+    <div class="table-wrap"><table>
+      <tr><th>功能</th><th>說明</th></tr>
+      <tr><td>免費無限上傳</td><td>相片與影片免費、無容量限制上傳，唔怕手機空間唔夠或舊檔被刪</td></tr>
+      <tr><td>私密分享</td><td>只限受邀家族成員觀看，可設「全體家族公開」或「僅限管理員（父母）」</td></tr>
+      <tr><td>自動按月整理</td><td>按拍攝日期與孩子月齡自動分類，滑動即回顧成長軌跡</td></tr>
+      <tr><td>家族留言互動</td><td>每張相片影片可留言，祖父母都輕鬆參與</td></tr>
+      <tr><td>1 秒短片集</td><td>上傳超過 20 部影片自動擷取每部 1 秒，製成季節/年度回顧短片</td></tr>
+      <tr><td>實體商品</td><td>訂製實體相簿、DVD，每月免費沖印 11 張相片</td></tr>
+      <tr><td>電腦上傳</td><td>瀏覽器上傳數位相機或舊相（白金會員功能）</td></tr>
+    </table></div>
+    <h3 class="sub">白金會員（付費方案）</h3>
+    <p class="section-desc">免費版已涵蓋大部分核心功能，升級白金會員可享：影片長度 2→10 分鐘、Full HD（1920×1080，Pro 方案）、電腦批次上傳、個別相簿與成長紀錄、詳細公開範圍（細分媽媽/爸爸親屬權限）、實體商品免運費、Chromecast 投放電視。</p>
+    <div class="tip green"><strong>關鍵規則</strong>：相簿中任一成員註冊白金會員，全體家族成員一齊享用進階功能，首次註冊享 1 個月免費試用。</div>
+    <h3 class="sub">適合誰使用？</h3>
+    <ul class="body-list">
+      <li>想記錄孩子成長、但唔想喺 Facebook / Instagram 等公開平台分享嘅父母</li>
+      <li>想祖父母、外祖父母隨時見到孩子近況嘅家庭</li>
+      <li>相片影片量大、手機容量成日唔夠嘅使用者</li>
+      <li>想將數碼回憶製作成實體相簿或 DVD 保存嘅家庭</li>
+    </ul>
+    <div class="tip info"><strong>同本教學嘅關係</strong>：免費無限上傳係賣點，但唔保證永久保存——本地備份先係最穩陣。本頁就係教你將成個相簿「搬返屋企」。</div>
   </div>
 
   <div class="footer">
