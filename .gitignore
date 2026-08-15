@@ -2,3 +2,4 @@ dist
 out
 .env*
 __pycache__/
+.stream_folder_id
