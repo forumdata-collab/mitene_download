@@ -131,7 +131,14 @@ async def async_main() -> None:
   parser.add_argument("--no-organize", action="store_true", help="Disable YYYY-MM subdirectories (flat output like upstream).")
   parser.add_argument("--cooldown", type=float, default=0.3, help="Jittered sleep seconds between downloads (0 disables).")
   parser.add_argument("--gdrive-upload", metavar="REMOTE:FOLDER", help="After download, rclone move files to GDrive (e.g. gdrive:mitene-backup).")
+  parser.add_argument("--months", help="Only download these YYYY-MM months, comma-separated (e.g. 2024-05,2024-06).")
+  parser.add_argument("--since", help="Only download months >= this YYYY-MM (e.g. 2024-01 = last 2 years).")
   args = parser.parse_args()
+
+  months_filter = None
+  if args.months:
+    months_filter = set(m.strip() for m in args.months.split(",") if m.strip())
+  since_filter = args.since
 
   os.makedirs(args.destination_directory, exist_ok=True)
   # cleanup temp files from previous run, if interrupted
@@ -179,6 +186,11 @@ async def async_main() -> None:
       if not data["mediaFiles"]:
         break
       for media in data["mediaFiles"]:
+        month = media["tookAt"][:7]
+        if months_filter is not None and month not in months_filter:
+          continue
+        if since_filter is not None and month < since_filter:
+          continue
         filename = urllib.parse.urlparse(media.get("expiringVideoUrl", media["expiringUrl"])).path.split("/")[-1]
         filename = f"{media['tookAt']}-{filename}".replace(":", "")
         if not os.path.splitext(filename)[1]:

@@ -89,6 +89,7 @@ tr:hover td{background:rgba(255,255,255,0.03)}
     <a href="#gdrive">GDrive 轉存</a>
     <a href="#cron">自動排程</a>
     <a href="#pitfalls">常見坑</a>
+    <a href="#qa">Q&amp;A</a>
     <a href="#upstream">Upstream</a>
     <a href="#about">家家相簿介紹</a>
   </div>
@@ -138,6 +139,8 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td><code>--cooldown N</code></td><td>0.3 秒</td><td>下載之間 jitter sleep；<code>0</code> 關閉；遇 429/5xx 自動指數退避重試（最多 4 次）</td></tr>
       <tr><td><code>--no-organize</code></td><td>開</td><td>關閉年月子目錄，回復 upstream 平面輸出</td></tr>
       <tr><td><code>--gdrive-upload REMOTE:FOLDER</code></td><td>關</td><td>下載完成後 <code>rclone move</code> 到 GDrive</td></tr>
+      <tr><td><code>--months YYYY-MM,...</code></td><td>—</td><td>只下載指定月份（如 <code>--months 2024-05,2024-06</code>）</td></tr>
+      <tr><td><code>--since YYYY-MM</code></td><td>—</td><td>只下載呢個月之後嘅所有月份</td></tr>
       <tr><td><code>--nocomments</code></td><td>關</td><td>唔下載留言 .md 檔</td></tr>
     </table></div>
     <p>每次執行後會喺 <code>out/download.log</code> 追加一行：</p>
@@ -171,14 +174,30 @@ tr:hover td{background:rgba(255,255,255,0.03)}
     </table></div>
   </div>
 
+
+  <div class="section" id="qa">
+    <div class="section-title"><span class="num">9</span>Q&amp;A 常見問題</div>
+    <div class="table-wrap"><table>
+      <tr><th>問題</th><th>答</th></tr>
+      <tr><td>可以反方向同步嗎（GDrive → 家家相簿）？</td><td>唔得。本工具只行公開嘅 <code>GET /media_files/{uuid}/download</code> 端點；上載係寫入操作，要逆向私有上載 API + 重寫成上傳器，而且違反 FamilyAlbum 使用條款風險。方向固定：家家 = 源，GDrive = 備份。</td></tr>
+      <tr><td>VM 需要幾大容量？可以邊下邊傳唔使存晒嗎？</td><td>預設 <code>--gdrive-upload</code> 係「全部落完 → rclone move」— VM 需要成個相簿容量。<strong>流式方案（零代碼）</strong>：<code>rclone mount gdrive:mitene-backup ~/mnt --daemon</code> 然後 <code>--destination-directory ~/mnt/out</code> 直接寫入掛載點，VM 磁碟峰值 = 並行 4 × 單檔大小。</td></tr>
+      <tr><td>成個相簿要下載幾耐？</td><td>公式 ≈ 檔案數 × (平均大小 ÷ 頻寬 + 0.3s cooldown)。例：10,000 張 × 3MB = 30GB，100Mbps VM ≈ <strong>1.5 小時</strong>（下載 ~40 分鐘 + cooldown 開銷）。影片（1GB+）另計。頻寬係樽頸，唔係 CPU。</td></tr>
+      <tr><td>斷線可以繼續嗎？</td><td>可以。已有檔案自動 skip，重跑只補漏。⚠️ 但 <code>--gdrive-upload</code>（move）係「傳完刪本地」——傳到一半斷咗，本地已刪 → 會重新下載。想斷線安全用 mount 或者 <code>rclone copy</code>（唔刪本地）。</td></tr>
+      <tr><td>無 VM 用戶點算？</td><td>（a）屋企舊電腦常開行 cron — $0，最簡單。（b）Android 舊電話用 Termux 裝 Python + rclone — $0 迷你 VM（iOS 做唔到）。兩者都係「機喺你手」，私密相片唔離開你控制。</td></tr>
+      <tr><td>可以整網頁版，即下即上唔經 VM 嗎？</td><td>做唔到。瀏覽器直接由 mitene 下載 → GDrive 需要跨兩個網域：mitene 唔開放 CORS（私有相簿），GDrive 直寫要 OAuth client，大影片喺瀏覽器記憶體傳輸唔穩定。任何純前端方案都要一個後台代理——個代理就係 VM，繞唔到。</td></tr>
+      <tr><td>用 Google 免費服務（Apps Script / Cloud Functions）做中轉？</td><td>兩個都唔啱：Apps Script 單次執行 <strong>6 分鐘上限</strong> + 單個 response <strong>20MB</strong>——影片全部超標；Cloud Functions 免費 tier 要綁信用卡先開到，而且本質都係中轉伺服器。微縮版（只拉縮圖清單）可以，全相簿連影片過唔到紅線。</td></tr>
+      <tr><td>可以只同步指定年月份嗎？</td><td>可以。<code>--months 2024-05,2024-06</code> 指定月份；<code>--since 2024-01</code> 只拉 2024 年 1 月之後。</td></tr>
+    </table></div>
+    <div class="tip info"><strong>debug 提示</strong>：以下係 2026-08-15 實測結論——CORS、Apps Script 6 分鐘/20MB 紅線、rclone move 斷線重拉，呢三點係後人最易撞返嘅牆。</div>
+  </div>
   <div class="section" id="upstream">
-    <div class="section-title"><span class="num">9</span>Upstream 對照</div>
+    <div class="section-title"><span class="num">10</span>Upstream 對照</div>
     <p class="section-desc">本 fork 基於 <a href="https://github.com/perrinjerome/mitene_download" target="_blank" rel="noopener">perrinjerome/mitene_download</a> v0.7.0（MIT）。新增功能全部向後兼容，唔用新 flag 就等同原版行為。上游更新後可用 <code>git merge upstream/main</code> 同步。</p>
   </div>
 
 
   <div class="section" id="about">
-    <div class="section-title"><span class="num">10</span>家家相簿（FamilyAlbum）是什麼</div>
+    <div class="section-title"><span class="num">11</span>家家相簿（FamilyAlbum）是什麼</div>
     <p class="section-desc"><strong>家家相簿</strong>由日本 mixi 株式會社開發，係家族專屬嘅相片與影片分享 App，繁體中文版 2020 年 1 月喺台灣正式推出。截至 2019 年底全球用戶突破 600 萬，喺日本每三位媽媽就有一位使用。核心理念係「令育兒更加開心」——提供一個父母安心、安全噉同家族成員分享孩子成長紀錄嘅私密空間，避免喺公開社群曝光孩子相片嘅風險。</p>
     <div class="table-wrap"><table>
       <tr><th>功能</th><th>說明</th></tr>

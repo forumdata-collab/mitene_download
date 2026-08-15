@@ -41,5 +41,15 @@ with tempfile.TemporaryDirectory() as d:
     res = asyncio.run(m.download_media(None, "http://none", f, "x", False, 0))  # type: ignore[arg-type]
     ok("existing file returns 'skip'", res == "skip")
 
+# 6. months/since filter logic (same predicate as in async_main)
+def passes_filter(month, months_filter, since_filter):
+    if months_filter is not None and month not in months_filter:
+        return False
+    if since_filter is not None and month < since_filter:
+        return False
+    return True
+ok("months filter includes only selected", passes_filter("2024-05", {"2024-05", "2024-06"}, None) and not passes_filter("2024-04", {"2024-05", "2024-06"}, None))
+ok("since filter >= boundary", passes_filter("2024-01", None, "2024-01") and not passes_filter("2023-12", None, "2024-01"))
+
 print("\n" + ("ALL PASS ✅" if not fail else f"FAILED: {fail}"))
 sys.exit(1 if fail else 0)
