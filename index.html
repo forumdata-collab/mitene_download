@@ -180,6 +180,8 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td>429 / 下載失敗</td><td>自動指數退避重試 4 次（1s→2s→4s→8s 加 jitter）；仲係失敗會記入 log 同 stderr。</td></tr>
       <tr><td>唔想佢 sleep 咁密</td><td><code>--cooldown 0.1</code> 加速；<code>--cooldown 0</code> 完全關閉（有被鎖風險，唔建議）。</td></tr>
       <tr><td>URL 過期（expiringUrl）</td><td>每個媒體嘅下載 URL 即場由頁面 API 攞，唔會過期；整條 album URL 先係長期有效嗰條。</td></tr>
+      <tr><td>⚠️ stream-daemon 模式檔案「下載成功但 GDrive 冇檔案」（2026-08-15 實測，2837 檔全 lost）</td><td><b>根因</b>：<code>--stream-daemon</code> 舊版喺寫 path 去 daemon 之後<b>立即 unlink 本地檔</b>，但 daemon 係由磁碟讀檔上傳——unlink 先過 upload 就 race，<code>stream_gdrive.py</code> 第一行 <code>os.path.exists()</code> check 失敗 → <b>靜默 skip，檔永久 lost</b>（download.log 仲報 added=2837 skipped=0，誤導）。<b>已修</b>：downloader 唔再 unlink，由 daemon upload 成功先刪。<b>驗證</b>：跑完對比 GDrive 實際檔數（見下方 Q&amp;A「點確認真係上晒」）。</td></tr>
+      <tr><td>daemon 一直唔退（wait timeout 3600s）</td><td>正常現象：downloader 寫完 2837 行 path 就完成，但 daemon 係一個一個排隊 upload，大 album 要 upload 完先退。download.log 寫咗 summary 唔代表 upload 完。<b>檢查</b>：<code>ps aux | grep stream_gdrive</code> 有 process = 仲 upload 緊；<code>find out -type f</code> 數目遞減 = 正常。等 daemon 自然退出，或者直接再跑一次（已有檔 skip，只補漏）。</td></tr>
     </table></div>
   </div>
 
@@ -198,6 +200,7 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td>可以只同步指定年月份嗎？</td><td>可以。<code>--months 2024-05,2024-06</code> 指定月份；<code>--since 2024-01</code> 只拉 2024 年 1 月之後。</td></tr>
       <tr><td>點知成個相簿有幾大、要跑幾耐？</td><td>先跑 <code>--dry-run</code>：掃描全部頁面，統計總檔數（相片/影片分佈）、總大小（未知大小以 3MB 估）、預計耗時（<code>--bandwidth-mbps</code> 改頻寬）。唔會下載任何檔案，確認滿意先正式跑。</td></tr>
       <tr><td>下載有失敗點 debug？</td><td>每次執行結束，失敗檔逐個寫入 <code>out/errors.log</code>（時間戳標題 + 每行 <code>名稱: 錯誤訊息</code>），同時 <code>download.log</code> 有 added/skipped/failed 總數。重跑只會補漏失敗嗰啲。</td></tr>
+      <tr><td>點確認 stream 模式真係全部上晒 GDrive？</td><td>download.log 嘅 added 只係「下載咗幾多」，唔等於「上傳咗幾多」。跑完之後：<br>① <code>find out -type f</code> 應該得 <code>download.log</code>（有殘留 = 未 upload 完或失敗）<br>② 用 Google Drive API 數 <code>mitene-backup</code> 下所有檔案總數，同 album 總數（<code>--dry-run</code> 報嘅數）對比<br>③ 差幾十個以內 = 正常（重跑自動補）；差成千個 = 中咗上面 stream race bug，即刻升級 fork。</td></tr>
     </table></div>
     <div class="tip info"><strong>debug 提示</strong>：以下係 2026-08-15 實測結論——CORS、Apps Script 6 分鐘/20MB 紅線、rclone move 斷線重拉，呢三點係後人最易撞返嘅牆。</div>
   </div>

@@ -7,7 +7,7 @@ Fork (forumdata-collab) additions over upstream v0.7.0:
   - --gdrive-upload: after download, `rclone move <dest> <remote>:<folder>` (needs rclone configured)
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.1"
 
 import argparse
 import asyncio
@@ -92,10 +92,8 @@ async def download_media(
       if stream_daemon:
         stream_daemon.stdin.write(destination_filename + "\n")
         stream_daemon.stdin.flush()
-        try:
-          os.unlink(destination_filename)  # daemon removes it after upload; ignore if already gone
-        except OSError:
-          pass
+        # DON'T unlink here — daemon uploads from disk, then unlinks on success.
+        # Unlinking first = race: daemon's os.path.exists() fails → silent data loss.
       elif stream_command:
         try:
           subprocess.run(stream_command.replace("{file}", destination_filename),
