@@ -4,7 +4,7 @@ Download medias from https://mitene.us/ or https://family-album.com/ to keep a l
 
 **101 教學 →** https://forumdata-collab.github.io/mitene_download/
 
-## Fork 新增功能 (v0.8.0, 基於 upstream v0.7.0)
+## Fork 新增功能 (v0.9.0, 基於 upstream v0.7.0)
 
 | 參數 | 預設 | 作用 |
 |---|---|---|

@@ -73,10 +73,10 @@ tr:hover td{background:rgba(255,255,255,0.03)}
   <a class="back-link" href="../">← 返回主頁</a>
 
   <div class="hero">
-    <div class="hero-badge">開放 API 實戰 · 2026-08-15 · fork v0.8.0</div>
+    <div class="hero-badge">開放 API 實戰 · 2026-08-15 · fork v0.9.0</div>
     <h1>Mitene 家庭相簿自動備份 · 101 教學</h1>
     <p>用 mitene_download 將 Mitene / Family Album 全部相片 + 影片備份落本地或 Google Drive<br>冷卻防鎖、年月分類、log 統計、rclone 轉存 —— 一次過講清</p>
-    <div class="disclaimer">⚠️ 本教學使用 <b>forumdata-collab fork</b>（v0.8.0），比 upstream 多四項功能：冷卻退避、年月子目錄、log 統計、GDrive 轉存。</div>
+    <div class="disclaimer">⚠️ 本教學使用 <b>forumdata-collab fork</b>（v0.9.0），比 upstream 多：冷卻退避、年月子目錄、原圖下載、dry-run 評估、流式 GDrive daemon、log/error 統計、multi-month 二分搜索。</div>
   </div>
 
   <div class="toc">
@@ -128,9 +128,9 @@ tr:hover td{background:rgba(255,255,255,0.03)}
   <div class="section" id="basic">
     <div class="section-title"><span class="num">4</span>基本用法（本地版）</div>
     <div class="cmd">mitene_download https://mitene.us/f/abcd123456 --destination-directory out</div>
-    <p>密碼保護相簿會提示輸入；自動建立 <code>out/YYYY-MM/</code> 子目錄，檔名含拍攝時間。重跑同一指令只會補漏（已有檔案 skip）。</p>
-    <div class="tip green"><strong>輸出結構</strong>：<code>out/2024-05/2024-05-01T12-34-56-xxxx.jpg</code> · 留言存成同名 <code>.md</code>。實例：</div>
-    <div class="cmd">out/<br>├── 2024-05/<br>│   ├── 2024-05-01T12-34-56-a1b2c3.jpg<br>│   ├── 2024-05-01T12-34-56-a1b2c3.md      ← 該相嘅留言<br>│   └── 2024-05-30T21-10-00-d4e5f6.mp4<br>├── 2024-06/<br>│   └── ...<br>├── download.log                           ← 每次執行統計<br>└── errors.log                             ← 失敗檔案逐行記錄</div>
+    <p>密碼保護相簿會提示輸入；自動建立 <code>out/YYYY-MM/</code> 子目錄，檔名 = <code>YYYYMMDD-6字CDN識別碼</code>。重跑同一指令只會補漏（已有檔案 skip）。</p>
+    <div class="tip green"><strong>輸出結構</strong>：<code>out/2024-05/20240501-a1b2c3.jpg</code> · 留言存成同名 <code>.md</code>。實例：</div>
+    <div class="cmd">out/<br>├── 2024-05/<br>│   ├── 20240501-a1b2c3.jpg<br>│   ├── 20240501-a1b2c3.md      ← 該相嘅留言<br>│   └── 20240530-d4e5f6.mp4<br>├── 2024-06/<br>│   └── ...<br>├── download.log                           ← 每次執行統計<br>└── errors.log                             ← 失敗檔案逐行記錄</div>
   </div>
 
   <div class="section" id="features">
@@ -139,7 +139,9 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><th>參數</th><th>預設</th><th>作用</th></tr>
       <tr><td><code>--cooldown N</code></td><td>0.3 秒</td><td>下載之間 jitter sleep；<code>0</code> 關閉；遇 429/5xx 自動指數退避重試（最多 4 次）</td></tr>
       <tr><td><code>--no-organize</code></td><td>開</td><td>關閉年月子目錄，回復 upstream 平面輸出</td></tr>
-      <tr><td><code>--gdrive-upload REMOTE:FOLDER</code></td><td>關</td><td>下載完成後 <code>rclone move</code> 到 GDrive</td></tr>
+      <tr><td><code>--gdrive-upload REMOTE:FOLDER</code></td><td>關</td><td>下載完成後 <code>rclone move</code> 到 GDrive（整批，需本地容量）</td></tr>
+      <tr><td><code>--stream-daemon CMD</code></td><td>關</td><td>長駐上傳程序（推薦）：下載一個即傳一個，VM 唔保留檔案；附 <code>stream_gdrive.py --daemon</code> helper，GDrive 結構自動 <code>mitene-backup/YYYY/MM/</code></td></tr>
+      <tr><td><code>--stream-command CMD</code></td><td>關</td><td>每檔下載完執行指定命令，<code>{file}</code> 替換成檔案路徑（慢，每檔 spawn 新 process）</td></tr>
       <tr><td><code>--months YYYY-MM,...</code></td><td>—</td><td>只下載指定月份（如 <code>--months 2024-05,2024-06</code>）</td></tr>
       <tr><td><code>--since YYYY-MM</code></td><td>—</td><td>只下載呢個月之後嘅所有月份</td></tr>
       <tr><td><code>--dry-run</code></td><td>關</td><td>執行前評估：總檔數 / 已下載 vs 待下載 / 總大小 / 預計耗時，唔下載任何檔案</td></tr>
@@ -153,11 +155,13 @@ tr:hover td{background:rgba(255,255,255,0.03)}
   </div>
 
   <div class="section" id="gdrive">
-    <div class="section-title"><span class="num">6</span>轉存 GDrive</div>
-    <p class="section-desc">一條命令搞掂 —— 落完本地自動搬上 GDrive：</p>
-    <div class="cmd">mitene_download https://mitene.us/f/abcd123456 --destination-directory out --gdrive-upload gdrive:mitene-backup</div>
-    <div class="tip warn"><strong>rclone move 會刪除本地檔案</strong>。想本地留一份，改用 <code>rclone sync out/ gdrive:mitene-backup</code> 自己喺 cron 執行。</div>
-    <div class="tip info"><strong>兩個版本點揀？</strong>本地版 (A) = 第一欄指令；轉存版 (B) = 加 <code>--gdrive-upload</code>。A 覆蓋「先落本地再手動備份」，B 覆蓋「落完直上雲端」。同一 script 兩個用途，唔使維護兩份 code。</div>
+    <div class="section-title"><span class="num">6</span>轉存 GDrive（流式，推薦）</div>
+    <p class="section-desc">長駐 daemon 一次 spawn，下載一個即傳一個，VM 唔保留檔案（適用大相簿 + 細 VM 磁碟）：</p>
+    <div class="cmd">mitene_download https://mitene.us/f/abcd123456 --password-file ~/album.pass \
+      --stream-daemon "python3 stream_gdrive.py --daemon"</div>
+    <p>GDrive 自動建立 <code>mitene-backup/YYYY/MM/</code> 結構（folder id 快取喺 <code>.stream_folder_id</code>，已 gitignore）。原圖下載（download endpoint），檔名 <code>YYYYMMDD-6字碼.jpg</code>。</p>
+    <div class="tip info"><strong>舊方法（整批 rclone）</strong>：<code>--gdrive-upload gdrive:mitene-backup</code> 落完先一次過搬，需要 VM 有全相簿容量；<code>--stream-command</code> 每檔 spawn 新 process（慢），三選一。</div>
+    <div class="tip warn"><strong>流式版注意</strong>：上傳失敗嗰個檔會留喺本地，重跑自動補傳；唔會刪家家相簿任何嘢（純讀取）。</div>
   </div>
 
   <div class="section" id="cron">
