@@ -52,9 +52,12 @@ async def download_media(
   verbose: bool,
   cooldown: float,
   stream_command: str = None,
+  stream_daemon: subprocess.Popen = None,
 ) -> tuple:
   """Download one media from URL. Returns ('new'|'skip', None) or ('error', 'name: message')."""
   if os.path.exists(destination_filename):
+    if os.environ.get("MITENE_DEBUG"):
+      print(f"DEBUG skip-L63: {destination_filename}", flush=True)
     if verbose:
       print(f"{media_name} already downloaded ✔️", flush=True)
     return ("skip", None)
@@ -81,10 +84,19 @@ async def download_media(
           await asyncio.sleep(2 ** attempt * random.uniform(1, 2))
           continue
       if os.path.exists(destination_filename):
+        if os.environ.get("MITENE_DEBUG"):
+          print(f"DEBUG skip-L88: {destination_filename}", flush=True)
         os.unlink(tmp)  # another task landed the same file first
         return ("skip", None)
       os.rename(tmp, destination_filename)
-      if stream_command:
+      if stream_daemon:
+        stream_daemon.stdin.write(destination_filename + "\n")
+        stream_daemon.stdin.flush()
+        try:
+          os.unlink(destination_filename)  # daemon removes it after upload; ignore if already gone
+        except OSError:
+          pass
+      elif stream_command:
         try:
           subprocess.run(stream_command.replace("{file}", destination_filename),
                          shell=True, check=True, capture_output=True, text=True)
@@ -103,6 +115,8 @@ async def download_media(
     except Exception as e:  # network error
       last_err = str(e)
       if os.path.exists(destination_filename):
+        if os.environ.get("MITENE_DEBUG"):
+          print(f"DEBUG skip-L116: {destination_filename} err={str(last_err)[:80]}", flush=True)
         return ("skip", None)  # another task finished this file meanwhile
       await asyncio.sleep(2 ** attempt * random.uniform(1, 2))
   try:
@@ -276,6 +290,7 @@ async def async_main() -> None:
   parser.add_argument("--password-file", help="Read password from a file (avoids exposing it in process list).")
   parser.add_argument("--interactive", action="store_true", help="Estimate first, then ask which time range to sync before downloading.")
   parser.add_argument("--stream-command", help="Run this shell command after each successful download; {file} is replaced with the file path (e.g. 'rclone move {file} gdrive:mitene-backup'). VM keeps no local copy.")
+  parser.add_argument("--stream-daemon", help="Long-lived uploader: spawn once, feed each downloaded file path on stdin (one per line). Much faster than --stream-command per-file spawn (e.g. 'python3 stream_gdrive.py --daemon').")
   args = parser.parse_args()
 
   if args.password_file:
@@ -303,6 +318,10 @@ async def async_main() -> None:
   download_coroutines = []
   all_medias = []  # for --dry-run estimate
   seen_uuids = set()  # album lists some media twice; dedupe
+  stream_daemon = None
+  if args.stream_daemon:
+    stream_daemon = subprocess.Popen(args.stream_daemon, shell=True, stdin=subprocess.PIPE, text=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   async with aiohttp.ClientSession(
     timeout=aiohttp.ClientTimeout(total=datetime.timedelta(minutes=30).total_seconds())
   ) as session:
@@ -407,6 +426,7 @@ async def async_main() -> None:
             args.verbose,
             args.cooldown,
             args.stream_command,
+            stream_daemon,
           )
         )
 
@@ -464,21 +484,32 @@ async def async_main() -> None:
         dest_dir = args.destination_directory if args.no_organize else organize_dest(args.destination_directory, media["tookAt"])
         download_coroutines.append(download_media(
           session, f"{args.album_url}/media_files/{media['uuid']}/download",
-          os.path.join(dest_dir, filename), media["uuid"], args.verbose, args.cooldown, args.stream_command))
+          os.path.join(dest_dir, filename), media["uuid"], args.verbose, args.cooldown, args.stream_command, stream_daemon))
       if not download_coroutines:
         print("⚠️ 呢個範圍冇檔案要下載", file=sys.stderr)
         return
       print(f"📥 開始下載 {len(download_coroutines)} 個檔案...", flush=True)
 
     results = await gather_with_concurrency(args.concurrency, *download_coroutines)
+    if os.environ.get("MITENE_DEBUG"):
+      print(f"DEBUG coroutines={len(download_coroutines)} results={len(results)}", flush=True)
     errors = []
     for status, detail in results:
       stats[status] += 1
       if status == "error":
         errors.append(detail)
+      if os.environ.get("MITENE_DEBUG") and status == "skip" and stats["skip"] <= 3:
+        print(f"DEBUG skip-status: {detail}", flush=True)
+    if os.environ.get("MITENE_DEBUG"):
+      print("DEBUG results:", {k: sum(1 for s, _ in results if s == k) for k in ("new", "skip", "error")}, flush=True)
 
   append_log(args.destination_directory, stats, args.album_url)
   append_error_log(args.destination_directory, args.album_url, errors)
+
+  # close daemon stdin, wait for remaining uploads to drain
+  if stream_daemon:
+    stream_daemon.stdin.close()
+    stream_daemon.wait(timeout=3600)
 
   if args.gdrive_upload:
     cmd = ["rclone", "move", args.destination_directory, args.gdrive_upload,

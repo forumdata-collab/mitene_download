@@ -38,24 +38,16 @@ def find_or_create(svc, name, parent=None, mime="application/vnd.google-apps.fol
         body["parents"] = [parent]
     return svc.files().create(body=body, fields="id").execute()["id"]
 
-def main():
-    if len(sys.argv) < 2:
-        print("usage: stream_gdrive.py <file>", file=sys.stderr); sys.exit(2)
-    f = sys.argv[1]
+def upload_one(svc, f):
+    """Upload a single file, return (ok, msg)."""
     if not os.path.exists(f):
-        print(f"❌ {f} not found", file=sys.stderr); sys.exit(2)
-
-    svc = _service()
+        return False, f"not found: {f}"
     cache = load_cache()
-
-    # root: mitene-backup
     root = cache.get("root")
     if not root:
         root = find_or_create(svc, PARENT_NAME)
         cache["root"] = root
         save_cache(cache)
-
-    # YYYY/MM from path segment like out/2021-10/xxx.jpg
     m = re.search(r"/(\d{4})-(\d{2})/", f)
     if m:
         y, mo = m.group(1), m.group(2)
@@ -72,13 +64,37 @@ def main():
         folder_id = m_id
     else:
         folder_id = root
-
     from googleapiclient.http import MediaFileUpload
     media = MediaFileUpload(f, resumable=True)
     svc.files().create(body={"name": os.path.basename(f), "parents": [folder_id]},
                        media_body=media, fields="id").execute()
     os.unlink(f)
-    print(f"✅ streamed {os.path.basename(f)}", flush=True)
+    return True, os.path.basename(f)
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: stream_gdrive.py <file> | stream_gdrive.py --daemon", file=sys.stderr); sys.exit(2)
+    if "--daemon" in sys.argv:
+        # long-lived uploader: one OAuth service, reads file paths from stdin, one per line.
+        svc = _service()
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            f = line.strip()
+            if not f:
+                continue
+            try:
+                ok, msg = upload_one(svc, f)
+                print(f"✅ streamed {msg}" if ok else f"❌ {msg}", flush=True)
+            except Exception as e:
+                print(f"❌ {f}: {e}", flush=True)
+        return
+    f = sys.argv[1]
+    svc = _service()
+    ok, msg = upload_one(svc, f)
+    print(f"✅ streamed {msg}" if ok else f"❌ {msg}", flush=True)
+    sys.exit(0 if ok else 1)
 
 if __name__ == "__main__":
     main()
