@@ -129,7 +129,8 @@ tr:hover td{background:rgba(255,255,255,0.03)}
     <div class="section-title"><span class="num">4</span>基本用法（本地版）</div>
     <div class="cmd">mitene_download https://mitene.us/f/abcd123456 --destination-directory out</div>
     <p>密碼保護相簿會提示輸入；自動建立 <code>out/YYYY-MM/</code> 子目錄，檔名含拍攝時間。重跑同一指令只會補漏（已有檔案 skip）。</p>
-    <div class="tip green"><strong>輸出結構</strong>：<code>out/2024-05/2024-05-01T12-34-56-xxxx.jpg</code> · 留言存成同名 <code>.md</code>。</div>
+    <div class="tip green"><strong>輸出結構</strong>：<code>out/2024-05/2024-05-01T12-34-56-xxxx.jpg</code> · 留言存成同名 <code>.md</code>。實例：</div>
+    <div class="cmd">out/<br>├── 2024-05/<br>│   ├── 2024-05-01T12-34-56-a1b2c3.jpg<br>│   ├── 2024-05-01T12-34-56-a1b2c3.md      ← 該相嘅留言<br>│   └── 2024-05-30T21-10-00-d4e5f6.mp4<br>├── 2024-06/<br>│   └── ...<br>├── download.log                           ← 每次執行統計<br>└── errors.log                             ← 失敗檔案逐行記錄</div>
   </div>
 
   <div class="section" id="features">
@@ -141,8 +142,10 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td><code>--gdrive-upload REMOTE:FOLDER</code></td><td>關</td><td>下載完成後 <code>rclone move</code> 到 GDrive</td></tr>
       <tr><td><code>--months YYYY-MM,...</code></td><td>—</td><td>只下載指定月份（如 <code>--months 2024-05,2024-06</code>）</td></tr>
       <tr><td><code>--since YYYY-MM</code></td><td>—</td><td>只下載呢個月之後嘅所有月份</td></tr>
-      <tr><td><code>--dry-run</code></td><td>關</td><td>執行前評估：總檔數 / 相片影片分佈 / 總大小 / 預計耗時，唔下載任何檔案</td></tr>
+      <tr><td><code>--dry-run</code></td><td>關</td><td>執行前評估：總檔數 / 已下載 vs 待下載 / 總大小 / 預計耗時，唔下載任何檔案</td></tr>
       <tr><td><code>--bandwidth-mbps N</code></td><td>100</td><td>dry-run 估算用嘅頻寬（影響預計耗時）</td></tr>
+      <tr><td><code>--concurrency N</code></td><td>4</td><td>並行下載數；大量影片可調低（<code>--concurrency 2</code>）</td></tr>
+      <tr><td><code>--password-file FILE</code></td><td>—</td><td>由檔案讀密碼，避免 `ps` 見到（較安全）</td></tr>
       <tr><td><code>--nocomments</code></td><td>關</td><td>唔下載留言 .md 檔</td></tr>
     </table></div>
     <p>每次執行後會喺 <code>out/download.log</code> 追加一行：</p>

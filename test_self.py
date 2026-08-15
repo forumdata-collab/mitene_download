@@ -62,9 +62,9 @@ with tempfile.TemporaryDirectory() as d:
 # 8. estimate_run: counts + size probing
 import io, contextlib
 med = [
-    {"contentType": "image/jpeg", "size": 3_000_000},
-    {"contentType": "video/mp4", "fileSize": 100_000_000},
-    {"contentType": "image/jpeg"},  # unknown size
+    {"contentType": "image/jpeg", "size": 3_000_000, "tookAt": "2024-05-01T12-34-56", "expiringUrl": "https://x/photo.jpg"},
+    {"contentType": "video/mp4", "fileSize": 100_000_000, "tookAt": "2024-06-01T12-34-56", "expiringUrl": "https://x/vid.mp4"},
+    {"contentType": "image/jpeg", "tookAt": "2024-07-01T12-34-56", "expiringUrl": "https://x/p.jpg"},  # unknown size
 ]
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
@@ -72,6 +72,16 @@ with contextlib.redirect_stdout(buf):
 out = buf.getvalue()
 ok("estimate counts photos/videos", "相片 2" in out and "影片 1" in out)
 ok("estimate shows duration", "小時" in out and "評估" in out)
+
+# 8b. estimate_run excludes already-downloaded (YYYY-MM dir exists)
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, "2024-05"))
+    open(os.path.join(d, "2024-05", "2024-05-01T12-34-56-photo.jpg"), "w").write("x")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m.estimate_run(med, 0.3, 100, d)
+    out2 = buf.getvalue()
+    ok("estimate excludes downloaded (已下載 1)", "已下載 1" in out2 and "待下載 2" in out2)
 
 print("\n" + ("ALL PASS ✅" if not fail else f"FAILED: {fail}"))
 sys.exit(1 if fail else 0)

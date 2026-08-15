@@ -66,10 +66,20 @@ async def download_media(
           await asyncio.sleep(2 ** attempt * random.uniform(1, 2))  # 429/5xx -> back off
           continue
         r.raise_for_status()
-        with open(destination_filename + ".tmp", "wb") as f:
+        expected = r.headers.get("Content-Length")
+        tmp = destination_filename + ".tmp"
+        with open(tmp, "wb") as f:
+          written = 0
           async for chunk in r.content.iter_chunked(1024 * 1024):
             f.write(chunk)
-      os.rename(destination_filename + ".tmp", destination_filename)
+            written += len(chunk)
+        # integrity: complete file must match advertised Content-Length
+        if expected is not None and written != int(expected):
+          last_err = f"size mismatch (got {written}, expected {expected})"
+          os.unlink(tmp)
+          await asyncio.sleep(2 ** attempt * random.uniform(1, 2))
+          continue
+      os.rename(tmp, destination_filename)
       if verbose:
         print(f"Downloading {media_name} ⏳", flush=True)
       if cooldown:
@@ -133,12 +143,24 @@ def append_error_log(destination_directory: str, album_url: str, errors: list) -
   print(f"❌ {len(errors)} failures logged -> errors.log", file=sys.stderr, flush=True)
 
 
-def estimate_run(medias: list, cooldown: float, bandwidth_mbps: float) -> None:
-  """Pre-run estimate: file count, total size, expected duration."""
+def estimate_run(medias: list, cooldown: float, bandwidth_mbps: float, destination_directory: str = "out") -> None:
+  """Pre-run estimate: file count, total size, expected duration (already-downloaded excluded)."""
   photos = videos = 0
   size_known = size_unknown = 0
   total_bytes = 0
+  already = 0
   for m in medias:
+    took = m.get("tookAt", "")
+    url = m.get("expiringUrl", m.get("expiringVideoUrl", ""))
+    name = urllib.parse.urlparse(url).path.split("/")[-1]
+    name = f"{took}-{name}".replace(":", "")
+    if not os.path.splitext(name)[1]:
+      if ext := mimetypes.guess_extension(m.get("contentType", "")):
+        name = name + ext
+    month = took[:7]
+    if os.path.exists(os.path.join(destination_directory, month, name)):
+      already += 1
+      continue
     if "video" in (m.get("contentType") or "").lower():
       videos += 1
     else:
@@ -161,8 +183,9 @@ def estimate_run(medias: list, cooldown: float, bandwidth_mbps: float) -> None:
   speed = bandwidth_mbps * 1e6 / 8  # bytes/sec
   est_sec = total_files * cooldown + est_bytes / speed
   print(f"\n📊 執行前評估 (--dry-run, 未下載任何檔案)")
-  print(f"   總檔案數: {total_files} (相片 {photos} / 影片 {videos})")
-  print(f"   總大小: {total_bytes/1e9:.2f} GB (已統計) + {size_unknown} 個未知大小 (估 3MB 每個) ≈ {est_bytes/1e9:.2f} GB")
+  print(f"   相簿總數: {len(medias)} 檔 (已下載 {already} / 待下載 {total_files})")
+  print(f"   待下載: {total_files} 檔 (相片 {photos} / 影片 {videos})")
+  print(f"   待下載大小: {total_bytes/1e9:.2f} GB (已統計) + {size_unknown} 個未知大小 (估 3MB 每個) ≈ {est_bytes/1e9:.2f} GB")
   print(f"   預計耗時: @{bandwidth_mbps:.0f} Mbps + {cooldown}s cooldown ≈ {est_sec/3600:.1f} 小時")
   print(f"   實際可用: --bandwidth-mbps 改頻寬 · --cooldown 改冷卻 · --months/--since 收窄範圍\n")
 
@@ -181,7 +204,16 @@ async def async_main() -> None:
   parser.add_argument("--since", help="Only download months >= this YYYY-MM (e.g. 2024-01 = last 2 years).")
   parser.add_argument("--dry-run", action="store_true", help="Estimate only: count files, total size, expected duration. Downloads nothing.")
   parser.add_argument("--bandwidth-mbps", type=float, default=100.0, help="Assumed download bandwidth for --dry-run estimate (default 100).")
+  parser.add_argument("--concurrency", type=int, default=4, help="Max parallel downloads (default 4; lower for huge videos).")
+  parser.add_argument("--password-file", help="Read password from a file (avoids exposing it in process list).")
   args = parser.parse_args()
+
+  if args.password_file:
+    try:
+      args.password = open(args.password_file).read().strip()
+    except OSError as e:
+      print(f"❌ Cannot read password file: {e}", file=sys.stderr)
+      sys.exit(2)
 
   months_filter = None
   if args.months:
@@ -279,10 +311,10 @@ async def async_main() -> None:
             comment_file.write_text(comment_text, encoding="utf-8")
 
     if args.dry_run:
-      estimate_run(all_medias, args.cooldown, args.bandwidth_mbps)
+      estimate_run(all_medias, args.cooldown, args.bandwidth_mbps, args.destination_directory)
       return
 
-    results = await gather_with_concurrency(4, *download_coroutines)
+    results = await gather_with_concurrency(args.concurrency, *download_coroutines)
     errors = []
     for status, detail in results:
       stats[status] += 1
@@ -296,13 +328,17 @@ async def async_main() -> None:
     cmd = ["rclone", "move", args.destination_directory, args.gdrive_upload,
            "--include", "*.jpg", "--include", "*.jpeg", "--include", "*.png",
            "--include", "*.gif", "--include", "*.mp4", "--include", "*.mov",
-           "--include", "*.md", "--include", "download.log", "-v"]
+           "--include", "*.md", "--include", "download.log", "--include", "errors.log", "-v"]
     print(f"📤 Uploading to {args.gdrive_upload} via rclone...", flush=True)
     proc = subprocess.run(cmd)
     if proc.returncode != 0:
       print("❌ rclone move failed", file=sys.stderr)
       sys.exit(proc.returncode)
     print("✅ Upload complete", flush=True)
+
+  if stats["error"] > 0:
+    print(f"❌ {stats['error']} file(s) failed — see errors.log", file=sys.stderr)
+    sys.exit(1)
 
 
 def main() -> None:
