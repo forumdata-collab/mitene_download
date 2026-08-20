@@ -3,7 +3,11 @@
 Used as --stream-command 'python3 stream_gdrive.py {file}' to keep VM disk lean.
 Structure: mitene-backup/YYYY/MM/<filename>  (YYYY-MM parsed from file path, e.g. out/2021-10/...)
 Folder ids cached in .stream_folder_id (JSON: {root, yyyy, mm})."""
-import sys, os, json, re
+import sys, os, json, re, socket
+
+# ponytail: global socket timeout; a hung GDrive request would otherwise block
+# the daemon forever, fill the pipe and wedge the whole download pipeline.
+socket.setdefaulttimeout(120)
 
 def _service():
     from google.oauth2.credentials import Credentials
@@ -38,6 +42,29 @@ def find_or_create(svc, name, parent=None, mime="application/vnd.google-apps.fol
         body["parents"] = [parent]
     return svc.files().create(body=body, fields="id").execute()["id"]
 
+def _folder_listing(svc, folder_id):
+    """name -> size map for one GDrive folder (paginated). Cached per process."""
+    if folder_id in _LISTING_CACHE:
+        return _LISTING_CACHE[folder_id]
+    listing = {}
+    page = None
+    while True:
+        req = svc.files().list(q=f"'{folder_id}' in parents and trashed=false",
+                               fields="nextPageToken,files(name,size)", pageSize=1000,
+                               pageToken=page)
+        r = req.execute()
+        for f in r.get("files", []):
+            listing[f["name"]] = f.get("size")
+        page = r.get("nextPageToken")
+        if not page:
+            break
+    _LISTING_CACHE[folder_id] = listing
+    return listing
+
+
+_LISTING_CACHE = {}
+
+
 def upload_one(svc, f):
     """Upload a single file, return (ok, msg)."""
     if not os.path.exists(f):
@@ -64,12 +91,19 @@ def upload_one(svc, f):
         folder_id = m_id
     else:
         folder_id = root
+    # dedupe: same name + same size already on GDrive -> safe to drop local copy
+    listing = _folder_listing(svc, folder_id)
+    name = os.path.basename(f)
+    local_size = str(os.path.getsize(f))
+    if listing.get(name) == local_size:
+        os.unlink(f)
+        return True, f"{name} (exists, skipped)"
     from googleapiclient.http import MediaFileUpload
     media = MediaFileUpload(f, resumable=True)
-    svc.files().create(body={"name": os.path.basename(f), "parents": [folder_id]},
+    svc.files().create(body={"name": name, "parents": [folder_id]},
                        media_body=media, fields="id").execute()
     os.unlink(f)
-    return True, os.path.basename(f)
+    return True, name
 
 def main():
     if len(sys.argv) < 2:

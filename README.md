@@ -26,6 +26,22 @@ Download medias from https://mitene.us/ or https://family-album.com/ to keep a l
 
 **驗證**：跑完 `find out -type f` 應只剩 `download.log`；GDrive 實際檔數應接近 album 總數。daemon 未退 = 仲 upload 緊，等佢自然退出或重跑補漏（已有檔 skip）。
 
+## v0.9.2 配套工具（2026-08-20）
+
+| 工具 | 作用 |
+|---|---|
+| `stream_gdrive.py` | 上傳前 **name+size 去重**（GDrive folder listing 快取，同名同 size skip，重跑零重複）；`socket.setdefaulttimeout(120)` 防 hung upload 卡死成條 pipeline |
+| `check_years.py` | **按年檢測**：逐年份 dry-run + GDrive 實數 → `.album_counts.json`（Web UI Check 按鈕同 runner 共用同一份數據） |
+| `sync_year.py` | **半年度續存**：每日一個半年度（2021 H1→H2→2022 H1…），flock 防 check/sync 互撞，完成年份由 cache 跳過，`timeout -k 30 20h` 安全上限（TERM 唔受，必須 -k） |
+| `dedupe_cleanup.py` | **一次性舊重複清理**：按 (folder, name) 分組，md5 相同先刪、每組留一（2026-08 實測清 ~9.5k 檔 / ~37GB） |
+
+**GDrive 結構 = 原生年月 mirror**：`mitene-backup/YYYY/MM/<filename>`（`YYYY-MM` 由檔案路徑解析，自動建 folder，folder id 快取喺 `.stream_folder_id`）。
+
+**注意事項**：
+- 月 folder 超過 1000 檔要 paginate（早期 count bug 令按年計數 under-count ~6k，已修）
+- 改檔名/UUID 格式前諗清楚：舊檔名同新檔名唔同名 → name+size 去重失效（會產生跨格式重複）
+- cron 用法：`30 3 * * * cd ~/mitene_download && python3 sync_year.py >> logs/year_sync.log 2>&1`
+
 ## Usage
 
 Install with `pip install git+https://github.com/forumdata-collab/mitene_download.git`.

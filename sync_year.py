@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Half-year-batched mitene sync (user model: each day syncs one 6-month half).
+
+Day 1 = 2021 H1 (Jan-Jun), day 2 = 2021 H2, day 3 = 2022 H1, ... end at 2026 H2.
+State = {"day": start, "half": N} where half 1..12 maps to (year, half-of-year).
+A half that finishes advances to the next; a timeout/error keeps the same half
+for the next day — stream_gdrive dedupe (name+size) makes reruns idempotent.
+Complete years (from .album_counts.json) are skipped without re-scanning.
+"""
+import json, os, subprocess, sys, datetime, tempfile, re, fcntl
+
+HOME = os.path.expanduser("~")
+MITENE_DIR = os.path.join(HOME, "mitene_download")
+VENV_PY = "/home/ubuntu/.hermes/hermes-agent/venv/bin/python3"
+STATE = os.path.join(MITENE_DIR, ".year_sync.json")
+CACHE = os.path.join(MITENE_DIR, ".album_counts.json")
+LOCK = "/tmp/mitene_sync.lock"
+LOG = os.path.join(MITENE_DIR, "logs")
+if not os.path.isdir(LOG):
+    os.makedirs(LOG)
+
+def load_counts():
+    try:
+        return json.load(open(CACHE))
+    except Exception:
+        return {}
+
+def load_env():
+    env = {}
+    for line in open(os.path.join(MITENE_DIR, ".env")):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k] = v
+    return env
+
+ENV = load_env()
+URL = ENV.get("MITENE_URL", "")
+PWD = ENV.get("MITENE_PASSWORD", "")
+
+def load_state():
+    try:
+        s = json.load(open(STATE))
+        if "year" in s and "half" not in s:  # migrate old hour-budget state
+            s["half"] = (s["year"] - 2021) * 2 + 1
+        return s
+    except Exception:
+        return {"day": datetime.date.today().isoformat(), "half": 1}
+
+def save_state(s):
+    json.dump(s, open(STATE, "w"))
+
+def half_to_year(half):
+    return 2021 + (half - 1) // 2
+
+def months_for_half(half):
+    year = half_to_year(half)
+    h = 1 + (half - 1) % 2
+    start = 1 if h == 1 else 7
+    return ",".join(f"{year}-{m:02d}" for m in range(start, start + 6))
+
+def months_for_year(year):
+    return ",".join(f"{year}-{m:02d}" for m in range(1, 13))
+
+def _drive():
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    tok = json.load(open(os.path.join(HOME, ".hermes/google_token.json")))
+    creds = Credentials(token=tok.get("token"), refresh_token=tok.get("refresh_token"),
+                        client_id=tok.get("client_id"), client_secret=tok.get("client_secret"),
+                        token_uri="https://oauth2.googleapis.com/token")
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+def _first_id(svc, q):
+    r = svc.files().list(q=q, pageSize=1, fields="files(id)").execute()
+    return r["files"][0]["id"] if r.get("files") else None
+
+def _count_folder(svc, fid):
+    """Count all non-folder files under a folder (recursive, paginated)."""
+    total = 0
+    page = None
+    while True:
+        r = svc.files().list(q=f"'{fid}' in parents and trashed=false",
+                             fields="nextPageToken,files(id,mimeType)", pageSize=1000,
+                             pageToken=page).execute()
+        for f in r.get("files", []):
+            if f.get("mimeType") == "application/vnd.google-apps.folder":
+                total += _count_folder(svc, f["id"])
+            else:
+                total += 1
+        page = r.get("nextPageToken")
+        if not page:
+            break
+    return total
+
+
+def gdrive_year_count(year):
+    """Total files under mitene-backup/<year> (recursive, paginated)."""
+    svc = _drive()
+    root = _first_id(svc, "name='mitene-backup' and mimeType='application/vnd.google-apps.folder' and trashed=false")
+    if not root:
+        return 0
+    yid = _first_id(svc, f"name='{year}' and mimeType='application/vnd.google-apps.folder' and '{root}' in parents and trashed=false")
+    if not yid:
+        return 0
+    return _count_folder(svc, yid)
+
+def album_year_count(year, pwd_path):
+    """Dry-run count of a year (pending downloads when local is empty)."""
+    out = subprocess.run([VENV_PY, os.path.join(MITENE_DIR, "mitene_download.py"), URL,
+                          "--months", months_for_year(year), "--dry-run",
+                          "--password-file", pwd_path],
+                         capture_output=True, text=True, cwd=MITENE_DIR, timeout=1200)
+    m = re.search(r"待下載: (\d+)", out.stdout)
+    return int(m.group(1)) if m else -1
+
+def main():
+    if not URL or not PWD:
+        print("missing MITENE_URL/MITENE_PASSWORD in .env", file=sys.stderr)
+        return 1
+    state = load_state()
+    half = state.get("half", 1)
+
+    pwd_file = tempfile.NamedTemporaryFile(delete=False, mode="w")
+    pwd_file.write(PWD)
+    pwd_file.close()
+    os.chmod(pwd_file.name, 0o600)
+    lock = open(LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("another sync/check running (lock held), skipping", flush=True)
+        os.unlink(pwd_file.name)
+        return 0
+    counts = load_counts()
+    try:
+        # advance past complete years (cache first, probe only when stale)
+        while half <= 12:
+            year = half_to_year(half)
+            c = counts.get(str(year))
+            if c and c.get("updated", "") >= (datetime.date.today() - datetime.timedelta(days=7)).isoformat() \
+                    and c.get("gdrive", 0) >= c.get("album", 0):
+                print(f"year {year}: cached complete ({c['gdrive']}/{c['album']}), skipping", flush=True)
+                half += 2  # both halves of a complete year
+                continue
+            album_n = album_year_count(year, pwd_file.name)
+            g_n = gdrive_year_count(year)
+            if album_n < 0:
+                print(f"dry-run parse failed for {year}, aborting", flush=True)
+                return 1
+            print(f"year {year}: album≈{album_n} GDrive={g_n}", flush=True)
+            counts[str(year)] = {"album": album_n, "gdrive": g_n,
+                                 "updated": datetime.date.today().isoformat()}
+            if g_n >= album_n:
+                print(f"  {year} already complete, skipping", flush=True)
+                half += 2
+                continue
+            break
+        json.dump(counts, open(CACHE, "w"), indent=1)
+        if half > 12:
+            print("all halves done (2021-2026 complete)", flush=True)
+            return 0
+        state["half"] = half
+        save_state(state)
+
+        months = months_for_half(half)
+        year = half_to_year(half)
+        cmd = [VENV_PY, os.path.join(MITENE_DIR, "mitene_download.py"), URL,
+               "--months", months,
+               "--stream-daemon", f"{VENV_PY} {os.path.join(MITENE_DIR, 'stream_gdrive.py')} --daemon",
+               "--password-file", pwd_file.name,
+               "--cooldown", "0.4", "--verbose"]
+        header = (f"\n=== {datetime.datetime.now():%Y-%m-%d %H:%M} "
+                  f"half {half} ({year} H{(half-1)%2+1}, months {months}) ===")
+        print(header, flush=True)
+        # safety cap 20h/day; -k: TERM alone is ignored by mitene_download (async cleanup)
+        rc = subprocess.call(["timeout", "-k", "30", "20h"] + cmd, cwd=MITENE_DIR)
+        if rc == 0:
+            state["half"] = half + 1
+            save_state(state)
+            print(f"half {half} done -> next half {state['half']}", flush=True)
+        else:
+            print(f"run rc={rc}, same half retries tomorrow (dedupe makes it idempotent)", flush=True)
+        # refresh cache with live GDrive counts after the run
+        counts[str(year)] = {"album": counts.get(str(year), {}).get("album", 0),
+                             "gdrive": gdrive_year_count(year),
+                             "updated": datetime.date.today().isoformat()}
+        json.dump(counts, open(CACHE, "w"), indent=1)
+    finally:
+        os.unlink(pwd_file.name)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

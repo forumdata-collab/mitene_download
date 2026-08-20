@@ -223,6 +223,18 @@ tr:hover td{background:rgba(255,255,255,0.03)}
       <tr><td>實體商品</td><td>訂製實體相簿、DVD，每月免費沖印 11 張相片</td></tr>
       <tr><td>電腦上傳</td><td>瀏覽器上傳數位相機或舊相（白金會員功能）</td></tr>
     </table></div>
+    <!-- 進階工具鏈 v0.9.2 -->
+    <div class="section">
+      <h3 class="sub">進階：去重複、按年檢測、半年度續存</h3>
+      <p class="section-desc">v0.9.2 加入四個配套工具，解決重複上傳、斷點續傳、同埋避免每次全掃描打爆 mitene API。</p>
+      <ul class="body-list">
+        <li><strong>去重機制（stream_gdrive.py）</strong>：上傳前對比 GDrive folder 嘅 (name, size)，同名同 size → skip，重跑零重複；另加 120 秒 socket timeout，單個 hung upload 唔會再卡死成條 pipeline</li>
+        <li><strong>按年檢測（check_years.py）</strong>：逐年份 dry-run + GDrive 實數 → <code>.album_counts.json</code>；Web UI 嘅 Check 按鈕同 cron runner 共用同一份資料，唔會各自掃描</li>
+        <li><strong>半年度續存（sync_year.py + cron）</strong>：每日一個半年度（2021 H1 → H2 → 2022 H1…），flock 防止 check 同 sync 互撞；已完成年份由 cache 直接跳過；<code>timeout -k 30 20h</code> 做安全上限（mitene_download 唔受 TERM，必須用 <code>-k</code> 先會真正斬）</li>
+        <li><strong>一次性清理（dedupe_cleanup.py）</strong>：按 (folder, name) 分組，md5 相同先刪、每組留一 — 2026-08 實測清走 ~9,500 個舊重複檔，釋放 ~37GB 配額</li>
+      </ul>
+      <div class="tip warn"><strong>⚠️ 改檔名格式之前諗清楚</strong>：舊格式同新格式嘅檔名唔同名，name+size 去重會判為「唔重複」→ 產生跨版本重複上傳（2025/2026 嘅 ~8,500 個重複就係咁嚟）。UUID 長度改動建議只喺全新 GDrive 結構上做。</div>
+    </div>
     <h3 class="sub">白金會員（付費方案）</h3>
     <p class="section-desc">免費版已涵蓋大部分核心功能，升級白金會員可享：影片長度 2→10 分鐘、Full HD（1920×1080，Pro 方案）、電腦批次上傳、個別相簿與成長紀錄、詳細公開範圍（細分媽媽/爸爸親屬權限）、實體商品免運費、Chromecast 投放電視。</p>
     <div class="tip green"><strong>關鍵規則</strong>：相簿中任一成員註冊白金會員，全體家族成員一齊享用進階功能，首次註冊享 1 個月免費試用。</div>

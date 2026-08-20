@@ -3,3 +3,7 @@ out
 .env*
 __pycache__/
 .stream_folder_id
+.album_counts.json
+.year_sync.json
+logs/
+*.log
