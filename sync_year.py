@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Half-year-batched mitene sync (user model: each day syncs one 6-month half).
+"""Half-year-batched mitene sync with per-month download->upload->verify (v0.9.3).
 
-Day 1 = 2021 H1 (Jan-Jun), day 2 = 2021 H2, day 3 = 2022 H1, ... end at 2026 H2.
-State = {"day": start, "half": N} where half 1..12 maps to (year, half-of-year).
-A half that finishes advances to the next; a timeout/error keeps the same half
-for the next day — stream_gdrive dedupe (name+size) makes reruns idempotent.
-Complete years (from .album_counts.json) are skipped without re-scanning.
+Day pacing: one 6-month half per day (2021 H1 -> H2 -> 2022 H1 ... 2026 H2).
+Inside a half, each month runs as: download month -> upload all files ->
+verify local empty (daemon unlinks only on success, so leftovers stay on disk)
+-> delete local -> next month. State tracks finished months, so an interrupted
+half resumes without re-downloading completed months. Complete years are
+skipped via .album_counts.json. flock guards against concurrent check/sync.
 """
 import json, os, subprocess, sys, datetime, tempfile, re, fcntl
 
@@ -114,6 +115,40 @@ def album_year_count(year, pwd_path):
     m = re.search(r"待下載: (\d+)", out.stdout)
     return int(m.group(1)) if m else -1
 
+def run_month(month, pwd_path):
+    """download month -> upload all files -> verify local empty (nothing lost).
+    Returns True only when every file made it to GDrive (daemon unlinks on success,
+    so leftovers = failures, which are KEPT on disk, never deleted)."""
+    dl = subprocess.call(["timeout", "-k", "30", "20h", VENV_PY,
+                          os.path.join(MITENE_DIR, "mitene_download.py"), URL,
+                          "--months", month, "--password-file", pwd_path,
+                          "--cooldown", "0.4", "--verbose"], cwd=MITENE_DIR)
+    if dl != 0:
+        print(f"  {month} download rc={dl}", flush=True)
+        return False
+    month_dir = os.path.join(MITENE_DIR, "out", month)
+    files = []
+    if os.path.isdir(month_dir):
+        files = sorted(os.path.join(month_dir, f) for f in os.listdir(month_dir)
+                       if os.path.isfile(os.path.join(month_dir, f)))
+    if files:
+        up = subprocess.run([VENV_PY, os.path.join(MITENE_DIR, "stream_gdrive.py"), "--daemon"],
+                            input="\n".join(files), text=True, capture_output=True,
+                            cwd=MITENE_DIR)
+        print(f"  {month} uploaded {len(files)} files", flush=True)
+        if up.stderr.strip():
+            print("   stderr:", up.stderr.strip()[:200], flush=True)
+    remaining = []
+    if os.path.isdir(month_dir):
+        remaining = [f for f in os.listdir(month_dir)
+                     if os.path.isfile(os.path.join(month_dir, f))]
+    if remaining:
+        print(f"  {month} VERIFY FAIL: {len(remaining)} files still local (kept, NOT deleted)", flush=True)
+        return False
+    print(f"  {month} OK (uploaded + verified, local clean)", flush=True)
+    return True
+
+
 def main():
     if not URL or not PWD:
         print("missing MITENE_URL/MITENE_PASSWORD in .env", file=sys.stderr)
@@ -163,24 +198,29 @@ def main():
         state["half"] = half
         save_state(state)
 
-        months = months_for_half(half)
+        months = months_for_half(half).split(",")
         year = half_to_year(half)
-        cmd = [VENV_PY, os.path.join(MITENE_DIR, "mitene_download.py"), URL,
-               "--months", months,
-               "--stream-daemon", f"{VENV_PY} {os.path.join(MITENE_DIR, 'stream_gdrive.py')} --daemon",
-               "--password-file", pwd_file.name,
-               "--cooldown", "0.4", "--verbose"]
+        done = set(state.get("months_done", []))
         header = (f"\n=== {datetime.datetime.now():%Y-%m-%d %H:%M} "
                   f"half {half} ({year} H{(half-1)%2+1}, months {months}) ===")
         print(header, flush=True)
-        # safety cap 20h/day; -k: TERM alone is ignored by mitene_download (async cleanup)
-        rc = subprocess.call(["timeout", "-k", "30", "20h"] + cmd, cwd=MITENE_DIR)
-        if rc == 0:
+        for month in months:
+            if month in done:
+                print(f"  {month} already done, skip", flush=True)
+                continue
+            if not run_month(month, pwd_file.name):
+                print(f"month {month} failed — {len(done)} done, retry same month tomorrow "
+                      f"(local files kept, nothing lost)", flush=True)
+                break
+            done.add(month)
+            state["months_done"] = sorted(done)
+            save_state(state)
+        else:
+            # all 6 months of the half verified clean -> advance
             state["half"] = half + 1
+            state.pop("months_done", None)
             save_state(state)
             print(f"half {half} done -> next half {state['half']}", flush=True)
-        else:
-            print(f"run rc={rc}, same half retries tomorrow (dedupe makes it idempotent)", flush=True)
         # refresh cache with live GDrive counts after the run
         counts[str(year)] = {"album": counts.get(str(year), {}).get("album", 0),
                              "gdrive": gdrive_year_count(year),

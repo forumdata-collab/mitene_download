@@ -48,7 +48,8 @@ def _folder_listing(svc, folder_id):
         return _LISTING_CACHE[folder_id]
     listing = {}
     page = None
-    while True:
+    seen = set()
+    for _ in range(50):  # ponytail: hard cap; a repeated pageToken would otherwise loop forever
         req = svc.files().list(q=f"'{folder_id}' in parents and trashed=false",
                                fields="nextPageToken,files(name,size)", pageSize=1000,
                                pageToken=page)
@@ -56,8 +57,9 @@ def _folder_listing(svc, folder_id):
         for f in r.get("files", []):
             listing[f["name"]] = f.get("size")
         page = r.get("nextPageToken")
-        if not page:
+        if not page or page in seen:
             break
+        seen.add(page)
     _LISTING_CACHE[folder_id] = listing
     return listing
 
