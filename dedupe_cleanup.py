@@ -11,7 +11,7 @@ Usage: python3 dedupe_cleanup.py [--commit]   (default = dry run)
 import json, os, sys, time, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sync_year import _drive, _first_id
+from gdrive_utils import _service, first_id
 
 COMMIT = "--commit" in sys.argv
 MITENE_DIR = os.path.expanduser("~/mitene_download")
@@ -46,8 +46,8 @@ def list_files(svc, fid):
     return out
 
 def main():
-    svc = _drive()
-    root = _first_id(svc, "name='mitene-backup' and mimeType='application/vnd.google-apps.folder' and trashed=false")
+    svc = _service()
+    root = first_id(svc, "name='mitene-backup' and mimeType='application/vnd.google-apps.folder' and trashed=false")
     if not root:
         print("mitene-backup not found"); return 1
     folders = list(walk_folders(svc, root))

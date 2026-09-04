@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """Stream helper: upload one file to Google Drive, delete local on success.
-Used as --stream-command 'python3 stream_gdrive.py {file}' to keep VM disk lean.
+Used as --stream-daemon 'python3 stream_gdrive.py --daemon' to keep VM disk lean.
 Structure: mitene-backup/YYYY/MM/<filename>  (YYYY-MM parsed from file path, e.g. out/2021-10/...)
-Folder ids cached in .stream_folder_id (JSON: {root, yyyy, mm})."""
+Folder ids cached in .stream_folder_id (JSON: {root, yyyy, mm}).
+
+Dedupe criteria: name + size (+ md5 when GDrive has it). A file is skipped
+only when name AND size AND md5 all match the GDrive copy — same name+size
+with a different md5 means content changed and is re-uploaded (loudly)."""
 import sys, os, json, re, socket
 
 # ponytail: global socket timeout; a hung GDrive request would otherwise block
 # the daemon forever, fill the pipe and wedge the whole download pipeline.
 socket.setdefaulttimeout(120)
 
-def _service():
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
-    tok = json.load(open(os.path.expanduser("~/.hermes/google_token.json")))
-    creds = Credentials(token=tok.get("token"), refresh_token=tok.get("refresh_token"),
-                        client_id=tok.get("client_id"), client_secret=tok.get("client_secret"),
-                        token_uri="https://oauth2.googleapis.com/token")
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gdrive_utils import _service, find_or_create, folder_listing, local_md5
 
 PARENT_NAME = "mitene-backup"
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".stream_folder_id")
@@ -29,42 +27,6 @@ def load_cache():
 
 def save_cache(c):
     json.dump(c, open(CACHE, "w"))
-
-def find_or_create(svc, name, parent=None, mime="application/vnd.google-apps.folder"):
-    q = f"name='{name}' and mimeType='{mime}' and trashed=false"
-    if parent:
-        q += f" and '{parent}' in parents"
-    r = svc.files().list(q=q, pageSize=1, fields="files(id)").execute()
-    if r.get("files"):
-        return r["files"][0]["id"]
-    body = {"name": name, "mimeType": mime}
-    if parent:
-        body["parents"] = [parent]
-    return svc.files().create(body=body, fields="id").execute()["id"]
-
-def _folder_listing(svc, folder_id):
-    """name -> size map for one GDrive folder (paginated). Cached per process."""
-    if folder_id in _LISTING_CACHE:
-        return _LISTING_CACHE[folder_id]
-    listing = {}
-    page = None
-    seen = set()
-    for _ in range(50):  # ponytail: hard cap; a repeated pageToken would otherwise loop forever
-        req = svc.files().list(q=f"'{folder_id}' in parents and trashed=false",
-                               fields="nextPageToken,files(name,size)", pageSize=1000,
-                               pageToken=page)
-        r = req.execute()
-        for f in r.get("files", []):
-            listing[f["name"]] = f.get("size")
-        page = r.get("nextPageToken")
-        if not page or page in seen:
-            break
-        seen.add(page)
-    _LISTING_CACHE[folder_id] = listing
-    return listing
-
-
-_LISTING_CACHE = {}
 
 
 def upload_one(svc, f):
@@ -93,17 +55,38 @@ def upload_one(svc, f):
         folder_id = m_id
     else:
         folder_id = root
-    # dedupe: same name + same size already on GDrive -> safe to drop local copy
-    listing = _folder_listing(svc, folder_id)
     name = os.path.basename(f)
     local_size = str(os.path.getsize(f))
-    if listing.get(name) == local_size:
-        os.unlink(f)
-        return True, f"{name} (exists, skipped)"
+    listing = folder_listing(svc, folder_id)
+    remote = listing.get(name)
+    if remote is not None:
+        if remote["size"] == local_size:
+            # same name + same size: confirm with md5 when GDrive exposes it
+            if remote["md5"]:
+                local_digest = local_md5(f)
+                if remote["md5"] == local_digest:
+                    os.unlink(f)
+                    return True, f"{name} (exists, skipped)"
+                # same name+size but DIFFERENT content: local is authoritative
+                # (fresh from album) — re-upload so the good copy wins; the
+                # stale GDrive twin is flagged for dedupe_cleanup later.
+                from googleapiclient.http import MediaFileUpload
+                media = MediaFileUpload(f, resumable=True)
+                svc.files().create(body={"name": name, "parents": [folder_id]},
+                                   media_body=media, fields="id").execute()
+                listing[name] = {"size": local_size, "md5": local_digest}
+                os.unlink(f)
+                return True, f"{name} (⚠ md5 DIFFERS vs stale gdrive copy {remote['md5'][:8]}, re-uploaded)"
+            os.unlink(f)
+            return True, f"{name} (exists, skipped size-only)"
+        print(f"⚠ {name}: same name, size differs (gdrive={remote['size']} local={local_size}), uploading", flush=True)
     from googleapiclient.http import MediaFileUpload
     media = MediaFileUpload(f, resumable=True)
     svc.files().create(body={"name": name, "parents": [folder_id]},
                        media_body=media, fields="id").execute()
+    # update in-process listing cache so a duplicate filename later in the
+    # same daemon run is recognized and skipped instead of double-uploaded
+    listing[name] = {"size": local_size, "md5": local_md5(f) if remote is None or not remote.get("md5") else remote["md5"]}
     os.unlink(f)
     return True, name
 

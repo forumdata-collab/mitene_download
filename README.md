@@ -30,12 +30,20 @@ Download medias from https://mitene.us/ or https://family-album.com/ to keep a l
 
 | 工具 | 作用 |
 |---|---|
-| `stream_gdrive.py` | 上傳前 **name+size 去重**（GDrive folder listing 快取，同名同 size skip，重跑零重複）；`socket.setdefaulttimeout(120)` 防 hung upload 卡死成條 pipeline |
+| `stream_gdrive.py` | 上傳前 **name+size+md5 去重**（GDrive folder listing 快取，同名同 size 再對 md5：三者全符先 skip，重跑零重複）；`socket.setdefaulttimeout(120)` 防 hung upload 卡死成條 pipeline |
 | `check_years.py` | **按年檢測**：逐年份 dry-run + GDrive 實數 → `.album_counts.json`（Web UI Check 按鈕同 runner 共用同一份數據） |
 | `sync_year.py` | **半年度續存（v0.9.3 逐月制）**：每日一個半年度（2021 H1→H2→2022 H1…）；入面每個月順序做 **下載 → 上傳 → 覆查本地清零 → 刪 VM 檔 → 下一個月**（daemon 只喺 upload 成功先 unlink，失敗嘅檔留喺 VM 唔會誤刪）；state 記住已完成月份，斷咗聽日續嗰個月唔會重下載；flock 防 check/sync 互撞，完成年份由 cache 跳過 |
 | `dedupe_cleanup.py` | **一次性舊重複清理**：按 (folder, name) 分組，md5 相同先刪、每組留一（2026-08 實測清 ~9.5k 檔 / ~37GB） |
 
 **GDrive 結構 = 原生年月 mirror**：`mitene-backup/YYYY/MM/<filename>`（`YYYY-MM` 由檔案路徑解析，自動建 folder，folder id 快取喺 `.stream_folder_id`）。
+
+## v0.9.4 共享 GDrive 層 + md5 去重升級（2026-09-04）
+
+- **`gdrive_utils.py`（新）**：統一 OAuth service、folder 查詢/建立、folder listing（連 `md5Checksum`）、遞歸計數、`local_md5()` —— 之前喺 6 個 script 重複抄寫嘅 Drive helper 全部收歸一處
+- **`stream_gdrive.py` 去重升級為 (name, size, md5)**：GDrive `files.list` 免費附送 `md5Checksum`，零額外 API 成本。同名同 size 但 md5 唔同 = GDrive 上係舊/壞檔 → 以本地（由 album 新拉）為準**重新上傳**，stale twin 留俾 `dedupe_cleanup.py` 處理；上傳後即時更新 process 內 listing cache，同一 daemon run 內重複檔名唔會雙重上載
+- **`diag_full.py` early-exit 修正**：`page_min < oldest_target` 會漏掃混合月份頁面（月頭檔永遠補唔返），改為 `page_max < oldest_target`
+- **`backfill_gap.py` 支援任意年份**：唔再硬編碼 2022-2024，`backfill_gap.py 2021 2025 2026`
+- **`sync_year.py` / `dedupe_cleanup.py`** 改用 `gdrive_utils`，移除本機重複定義
 
 **注意事項**：
 - 月 folder 超過 1000 檔要 paginate（早期 count bug 令按年計數 under-count ~6k，已修）
